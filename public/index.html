@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VidVerba</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">V</div>
+          <div>
+            <h1>VidVerba</h1>
+            <p id="plan-state">draft</p>
+          </div>
+        </div>
+        <nav id="steps" class="steps"></nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="step-eyebrow">Source</p>
+            <h2 id="step-title">Select Source Video</h2>
+          </div>
+          <div class="topbar-actions">
+            <button id="back-button" class="secondary" type="button">Back</button>
+            <button id="next-button" type="button">Next</button>
+          </div>
+        </header>
+
+        <section id="notice" class="notice hidden"></section>
+
+        <section id="view-source" class="view active">
+          <div class="panel desktop-panel">
+            <div class="toolbar split">
+              <div>
+                <h3>Desktop Workspace</h3>
+                <p id="workspace-status" class="status-line">Loading desktop configuration.</p>
+              </div>
+              <div class="button-group">
+                <button id="choose-workspace" class="secondary" type="button">Choose Workspace</button>
+                <button id="save-dependencies" type="button">Save Settings</button>
+              </div>
+            </div>
+            <div class="desktop-settings-grid">
+              <label>Workspace <input id="workspace-path" placeholder="Choose a workspace folder"></label>
+              <label>ffmpeg <input id="ffmpeg-path" placeholder="auto-detect from PATH"></label>
+              <label>ffprobe <input id="ffprobe-path" placeholder="auto-detect from PATH"></label>
+              <label>Python <input id="python-path" placeholder="auto-detect from PATH"></label>
+            </div>
+            <div id="dependency-grid" class="dependency-grid"></div>
+          </div>
+
+          <div class="two-column">
+            <div class="panel browser-panel">
+              <div class="path-row">
+                <input id="folder-input" aria-label="Folder path">
+                <button id="open-folder" class="secondary" type="button">Open</button>
+                <button id="up-folder" class="icon-button" type="button" title="Up">↑</button>
+                <button id="choose-source" class="secondary" type="button">Choose File</button>
+              </div>
+              <div id="roots" class="root-row"></div>
+              <div id="browser-list" class="browser-list"></div>
+            </div>
+            <div class="panel details-panel">
+              <h3>Sources</h3>
+              <div id="source-list" class="source-list empty-state">No source selected.</div>
+              <div id="metadata-grid" class="metadata-grid"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-transcript" class="view">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="field compact">
+                <label for="model-input">Model</label>
+                <input id="model-input" value="base">
+              </div>
+              <div class="field compact">
+                <label for="language-input">Language</label>
+                <input id="language-input" placeholder="auto">
+              </div>
+              <div class="field compact">
+                <label for="device-input">Device</label>
+                <select id="device-input">
+                  <option value="cpu">cpu</option>
+                  <option value="cuda">cuda</option>
+                </select>
+              </div>
+              <button id="load-transcript" type="button">Load Transcript</button>
+              <button id="force-transcript" class="secondary" type="button">Run Fresh</button>
+            </div>
+            <div id="transcript-status" class="status-line">No transcript loaded.</div>
+            <div id="transcript-preview" class="transcript-preview"></div>
+          </div>
+        </section>
+
+        <section id="view-timestamps" class="view">
+          <div class="panel">
+            <div class="toolbar split">
+              <h3>Timestamp Corrections</h3>
+              <button id="reset-adjustments" class="secondary" type="button">Reset Adjustments</button>
+            </div>
+            <div id="timestamp-table" class="segment-table"></div>
+          </div>
+        </section>
+
+        <section id="view-selection" class="view">
+          <div class="panel">
+            <div class="toolbar split">
+              <h3>Selected Ranges</h3>
+              <div class="button-group">
+                <button id="select-all" class="secondary" type="button">Select All</button>
+                <button id="select-none" class="secondary" type="button">Select None</button>
+              </div>
+            </div>
+            <div id="selection-summary" class="summary-strip"></div>
+            <div id="selection-table" class="segment-table"></div>
+          </div>
+        </section>
+
+        <section id="view-export" class="view">
+          <div class="settings-grid">
+            <div class="panel">
+              <h3>Range Padding</h3>
+              <div class="field-row">
+                <label>Lead in <input id="lead-in" type="number" min="0" step="0.1" value="0.5"></label>
+                <label>Lead out <input id="lead-out" type="number" min="0" step="0.1" value="0.8"></label>
+              </div>
+            </div>
+            <div class="panel">
+              <h3>Silence Trim</h3>
+              <label class="toggle"><input id="silence-enabled" type="checkbox"> Enabled</label>
+              <div class="field-row">
+                <label>Threshold dB <input id="threshold-db" type="number" step="1" value="-39"></label>
+                <label>Min silence <input id="min-silence" type="number" min="0" step="0.1" value="0.6"></label>
+                <label>Min clip <input id="min-clip" type="number" min="0" step="0.1" value="0.3"></label>
+                <label>Front pad <input id="front-padding" type="number" min="0" step="0.1" value="0.1"></label>
+              </div>
+            </div>
+            <div class="panel">
+              <h3>Export</h3>
+              <div class="field-row">
+                <label>Video codec
+                  <select id="video-codec">
+                    <option value="libx264">H.264 software</option>
+                    <option value="h264_nvenc">H.264 NVENC</option>
+                    <option value="av1_nvenc">AV1 NVENC</option>
+                  </select>
+                </label>
+                <label>Frame rate <input id="frame-rate" type="number" min="1" step="0.001" placeholder="source"></label>
+              </div>
+              <label class="toggle"><input id="edit-friendly" type="checkbox" checked> Edit-friendly CFR MP4</label>
+              <label class="wide-label">Output file <input id="output-file" placeholder="auto"></label>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-analyze" class="view">
+          <div class="panel">
+            <div class="toolbar split">
+              <div>
+                <h3>Analyze Report</h3>
+                <p id="fingerprint-line" class="status-line">No current report.</p>
+              </div>
+              <div class="button-group">
+                <button id="run-analyze" type="button">Run Analyze</button>
+                <button id="approve-report" class="secondary" type="button" disabled>Approve Plan</button>
+              </div>
+            </div>
+            <div id="report-view" class="report-view empty-state">Run Analyze to preview the exact keep ranges.</div>
+          </div>
+        </section>
+
+        <section id="view-render" class="view">
+          <div class="panel">
+            <div class="toolbar split">
+              <div>
+                <h3>Render</h3>
+                <p id="render-status" class="status-line">Awaiting an approved Analyze report.</p>
+              </div>
+              <button id="render-button" type="button" disabled>Render This Plan</button>
+            </div>
+            <pre id="render-log" class="log-output"></pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

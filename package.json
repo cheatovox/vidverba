@@ -1,0 +1,24 @@
+{
+  "name": "vidverba",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local clip selection UI for transcript-guided video exports.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
+    "check": "node --check server.js",
+    "check:desktop": "tauri info"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
