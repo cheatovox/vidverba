@@ -11,6 +11,11 @@ use std::time::{Duration, UNIX_EPOCH};
 
 const TRANSCRIBE_SCRIPT: &str = include_str!("../resources/transcribe_video.py");
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "webm"];
+const DEFAULT_TRANSCRIPTION_MODEL: &str = "medium";
+const TRANSCRIPTION_MODELS: &[&str] = &["tiny", "base", "small", "medium", "large-v3"];
+const DEFAULT_VAD_MIN_SILENCE_MS: u32 = 500;
+const DEFAULT_HALLUCINATION_SILENCE_THRESHOLD: f64 = 1.0;
+const DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB: f64 = -39.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -23,23 +28,83 @@ struct DependencyPaths {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptionDefaults {
+    #[serde(default = "default_transcription_model")]
     model: String,
+    #[serde(default)]
     language: Option<String>,
+    #[serde(default = "default_transcription_device")]
     device: String,
+    #[serde(default = "default_compute_type")]
     compute_type: String,
+    #[serde(default = "default_beam_size")]
     beam_size: u32,
+    #[serde(default = "default_true")]
+    vad_filter: bool,
+    #[serde(default = "default_vad_min_silence_ms")]
+    vad_min_silence_ms: u32,
+    #[serde(default = "default_true")]
+    word_timestamps: bool,
+    #[serde(default)]
+    condition_on_previous_text: bool,
+    #[serde(default = "default_hallucination_silence_threshold")]
+    hallucination_silence_threshold: f64,
+    #[serde(default = "default_transcript_silence_threshold_db")]
+    silence_threshold_db: f64,
 }
 
 impl Default for TranscriptionDefaults {
     fn default() -> Self {
         Self {
-            model: "base".to_string(),
+            model: default_transcription_model(),
             language: None,
-            device: "cpu".to_string(),
-            compute_type: "auto".to_string(),
-            beam_size: 5,
+            device: default_transcription_device(),
+            compute_type: default_compute_type(),
+            beam_size: default_beam_size(),
+            vad_filter: true,
+            vad_min_silence_ms: DEFAULT_VAD_MIN_SILENCE_MS,
+            word_timestamps: true,
+            condition_on_previous_text: false,
+            hallucination_silence_threshold: DEFAULT_HALLUCINATION_SILENCE_THRESHOLD,
+            silence_threshold_db: DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB,
         }
     }
+}
+
+fn default_transcription_model() -> String {
+    DEFAULT_TRANSCRIPTION_MODEL.to_string()
+}
+
+fn normalize_transcription_model(model: &str) -> String {
+    let model = model.trim();
+    if TRANSCRIPTION_MODELS.contains(&model) {
+        model.to_string()
+    } else {
+        DEFAULT_TRANSCRIPTION_MODEL.to_string()
+    }
+}
+
+fn default_compute_type() -> String {
+    "auto".to_string()
+}
+
+fn default_beam_size() -> u32 {
+    5
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_vad_min_silence_ms() -> u32 {
+    DEFAULT_VAD_MIN_SILENCE_MS
+}
+
+fn default_hallucination_silence_threshold() -> f64 {
+    DEFAULT_HALLUCINATION_SILENCE_THRESHOLD
+}
+
+fn default_transcript_silence_threshold_db() -> f64 {
+    DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,9 +130,13 @@ impl Default for ExportDefaults {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct DesktopSettings {
+    #[serde(default)]
     workspace_path: Option<String>,
+    #[serde(default)]
     dependency_paths: DependencyPaths,
+    #[serde(default)]
     transcription: TranscriptionDefaults,
+    #[serde(default)]
     export: ExportDefaults,
 }
 
@@ -162,6 +231,12 @@ struct TranscriptRequest {
     device: Option<String>,
     compute_type: Option<String>,
     beam_size: Option<u32>,
+    vad_filter: Option<bool>,
+    vad_min_silence_ms: Option<u32>,
+    word_timestamps: Option<bool>,
+    condition_on_previous_text: Option<bool>,
+    hallucination_silence_threshold: Option<f64>,
+    silence_threshold_db: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +255,18 @@ struct RawSegment {
     end: f64,
     #[serde(default)]
     text: String,
+    #[serde(default, rename = "avgLogprob", alias = "avg_logprob")]
+    avg_logprob: Option<f64>,
+    #[serde(default, rename = "compressionRatio", alias = "compression_ratio")]
+    compression_ratio: Option<f64>,
+    #[serde(default, rename = "noSpeechProb", alias = "no_speech_prob")]
+    no_speech_prob: Option<f64>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    words: Vec<TranscriptWord>,
+    #[serde(default)]
+    validation: Option<TranscriptValidation>,
     #[serde(default, rename = "adjustedStart")]
     adjusted_start: Option<f64>,
     #[serde(default, rename = "adjustedEnd")]
@@ -192,6 +279,51 @@ struct RawSegment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TranscriptWord {
+    start: f64,
+    end: f64,
+    word: String,
+    #[serde(default)]
+    probability: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptValidation {
+    status: String,
+    #[serde(default)]
+    reasons: Vec<String>,
+    #[serde(default)]
+    silent_duration: Option<f64>,
+    #[serde(default)]
+    silent_percent: Option<f64>,
+    #[serde(default)]
+    leading_silence: Option<f64>,
+    #[serde(default)]
+    mean_word_probability: Option<f64>,
+}
+
+impl TranscriptValidation {
+    fn unknown() -> Self {
+        Self {
+            status: "unknown".to_string(),
+            reasons: vec!["no confidence metadata available".to_string()],
+            silent_duration: None,
+            silent_percent: None,
+            leading_silence: None,
+            mean_word_probability: None,
+        }
+    }
+}
+
+impl Default for TranscriptValidation {
+    fn default() -> Self {
+        Self::unknown()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TranscriptSegment {
     id: String,
     source_video: String,
@@ -200,6 +332,18 @@ struct TranscriptSegment {
     adjusted_start: f64,
     adjusted_end: f64,
     text: String,
+    #[serde(default)]
+    avg_logprob: Option<f64>,
+    #[serde(default)]
+    compression_ratio: Option<f64>,
+    #[serde(default)]
+    no_speech_prob: Option<f64>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    words: Vec<TranscriptWord>,
+    #[serde(default)]
+    validation: TranscriptValidation,
     selected: bool,
     timestamp_adjusted: bool,
 }
@@ -314,6 +458,10 @@ struct Range {
     source: String,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    validation_status: Option<String>,
+    #[serde(default)]
+    validation_reasons: Vec<String>,
     #[serde(default)]
     lead_in: Option<f64>,
     #[serde(default)]
@@ -483,7 +631,31 @@ fn load_settings() -> DesktopSettings {
         }
     }
 
+    normalize_settings(&mut settings);
     settings
+}
+
+fn normalize_settings(settings: &mut DesktopSettings) {
+    settings.transcription.model = normalize_transcription_model(&settings.transcription.model);
+    if settings.transcription.device.trim().is_empty() {
+        settings.transcription.device = default_transcription_device();
+    }
+    if settings.transcription.compute_type.trim().is_empty() {
+        settings.transcription.compute_type = default_compute_type();
+    }
+    if settings.transcription.beam_size == 0 {
+        settings.transcription.beam_size = default_beam_size();
+    }
+    if settings.transcription.vad_min_silence_ms == 0 {
+        settings.transcription.vad_min_silence_ms = DEFAULT_VAD_MIN_SILENCE_MS;
+    }
+    if settings.transcription.hallucination_silence_threshold <= 0.0 {
+        settings.transcription.hallucination_silence_threshold =
+            DEFAULT_HALLUCINATION_SILENCE_THRESHOLD;
+    }
+    if settings.transcription.silence_threshold_db == 0.0 {
+        settings.transcription.silence_threshold_db = DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB;
+    }
 }
 
 fn save_all_settings(settings: &DesktopSettings) -> Result<(), String> {
@@ -517,6 +689,21 @@ fn resolve_executable(configured: &Option<String>, names: &[&str]) -> Option<Pat
         }
     }
     None
+}
+
+fn has_nvidia_gpu() -> bool {
+    which::which("nvidia-smi")
+        .ok()
+        .and_then(|path| Command::new(path).arg("-L").output().ok())
+        .is_some_and(|output| output.status.success() && !output.stdout.is_empty())
+}
+
+fn default_transcription_device() -> String {
+    if has_nvidia_gpu() {
+        "cuda".to_string()
+    } else {
+        "auto".to_string()
+    }
 }
 
 fn command_first_line(executable: &Path, args: &[&str]) -> Option<String> {
@@ -670,10 +857,18 @@ fn config_from_settings(settings: DesktopSettings) -> AppConfig {
     AppConfig {
         workspace_path: settings.workspace_path.clone(),
         default_input_dir: path_to_string(&default_input_dir),
-        transcript_root: workspace.as_ref().map(|path| path_to_string(&path.join("transcripts"))),
-        render_root: workspace.as_ref().map(|path| path_to_string(&path.join("renders"))),
-        projects_root: workspace.as_ref().map(|path| path_to_string(&path.join("projects"))),
-        settings_path: workspace.as_ref().map(|path| path_to_string(&workspace_settings_path(path))),
+        transcript_root: workspace
+            .as_ref()
+            .map(|path| path_to_string(&path.join("transcripts"))),
+        render_root: workspace
+            .as_ref()
+            .map(|path| path_to_string(&path.join("renders"))),
+        projects_root: workspace
+            .as_ref()
+            .map(|path| path_to_string(&path.join("projects"))),
+        settings_path: workspace
+            .as_ref()
+            .map(|path| path_to_string(&workspace_settings_path(path))),
         settings,
         dependencies,
     }
@@ -696,8 +891,12 @@ fn check_dependencies() -> DependencyReport {
 #[tauri::command]
 fn set_workspace(path: String) -> Result<AppConfig, String> {
     let workspace = canonical_or_absolute(PathBuf::from(path));
-    fs::create_dir_all(&workspace)
-        .map_err(|error| format!("Could not create workspace {}: {error}", workspace.display()))?;
+    fs::create_dir_all(&workspace).map_err(|error| {
+        format!(
+            "Could not create workspace {}: {error}",
+            workspace.display()
+        )
+    })?;
     ensure_workspace_dirs(&workspace)?;
     let mut settings = load_settings();
     settings.workspace_path = Some(path_to_string(&workspace));
@@ -706,7 +905,8 @@ fn set_workspace(path: String) -> Result<AppConfig, String> {
 }
 
 #[tauri::command]
-fn save_settings(settings: DesktopSettings) -> Result<AppConfig, String> {
+fn save_settings(mut settings: DesktopSettings) -> Result<AppConfig, String> {
+    normalize_settings(&mut settings);
     if let Some(workspace) = &settings.workspace_path {
         ensure_workspace_dirs(&PathBuf::from(workspace))?;
     }
@@ -745,7 +945,11 @@ fn browse_directory(requested_dir: Option<String>) -> Result<BrowseResult, Strin
             .extension()
             .and_then(|value| value.to_str())
             .map(|value| value.to_ascii_lowercase());
-        if !is_dir && !ext.as_deref().is_some_and(|value| VIDEO_EXTENSIONS.contains(&value)) {
+        if !is_dir
+            && !ext
+                .as_deref()
+                .is_some_and(|value| VIDEO_EXTENSIONS.contains(&value))
+        {
             continue;
         }
         let modified_ms = metadata
@@ -830,6 +1034,7 @@ fn load_or_run_transcript(request: TranscriptRequest) -> Result<TranscriptRespon
 
     let deps = dependency_report(&settings);
     let python = executable_or_error(&deps.python)?;
+    let ffmpeg = executable_or_error(&deps.ffmpeg)?;
     if !deps.faster_whisper.available {
         return Err(deps.faster_whisper.message);
     }
@@ -841,16 +1046,18 @@ fn load_or_run_transcript(request: TranscriptRequest) -> Result<TranscriptRespon
         .map_err(|error| format!("Could not write transcription helper: {error}"))?;
 
     let transcript_root = workspace.join("transcripts");
+    let model = request
+        .model
+        .as_deref()
+        .map(normalize_transcription_model)
+        .unwrap_or_else(|| settings.transcription.model.clone());
     let mut args: Vec<OsString> = vec![
         script_path.into_os_string(),
         source_path.clone().into_os_string(),
         "--output-dir".into(),
         transcript_root.clone().into_os_string(),
         "--model".into(),
-        request
-            .model
-            .unwrap_or(settings.transcription.model)
-            .into(),
+        model.into(),
         "--device".into(),
         request
             .device
@@ -867,7 +1074,51 @@ fn load_or_run_transcript(request: TranscriptRequest) -> Result<TranscriptRespon
             .unwrap_or(settings.transcription.beam_size)
             .to_string()
             .into(),
+        "--vad-min-silence-ms".into(),
+        request
+            .vad_min_silence_ms
+            .unwrap_or(settings.transcription.vad_min_silence_ms)
+            .to_string()
+            .into(),
+        "--hallucination-silence-threshold".into(),
+        request
+            .hallucination_silence_threshold
+            .unwrap_or(settings.transcription.hallucination_silence_threshold)
+            .to_string()
+            .into(),
+        "--ffmpeg".into(),
+        ffmpeg.into_os_string(),
+        "--silence-threshold-db".into(),
+        request
+            .silence_threshold_db
+            .unwrap_or(settings.transcription.silence_threshold_db)
+            .to_string()
+            .into(),
     ];
+    if request
+        .vad_filter
+        .unwrap_or(settings.transcription.vad_filter)
+    {
+        args.push("--vad-filter".into());
+    } else {
+        args.push("--no-vad-filter".into());
+    }
+    if request
+        .word_timestamps
+        .unwrap_or(settings.transcription.word_timestamps)
+    {
+        args.push("--word-timestamps".into());
+    } else {
+        args.push("--no-word-timestamps".into());
+    }
+    if request
+        .condition_on_previous_text
+        .unwrap_or(settings.transcription.condition_on_previous_text)
+    {
+        args.push("--condition-on-previous-text".into());
+    } else {
+        args.push("--no-condition-on-previous-text".into());
+    }
     if let Some(language) = request.language.or(settings.transcription.language) {
         if !language.trim().is_empty() {
             args.push("--language".into());
@@ -917,7 +1168,9 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
     }
     for segment in &request.transcript_segments {
         if segment.selected {
-            source_paths.insert(path_to_string(&canonical_or_absolute(&segment.source_video)));
+            source_paths.insert(path_to_string(&canonical_or_absolute(
+                &segment.source_video,
+            )));
         }
     }
 
@@ -941,14 +1194,24 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
     if had_overlap {
         warnings.push("Selected ranges overlap and will be merged before analysis.".to_string());
     }
+    add_transcript_validation_warnings(&selected_ranges, &mut warnings);
 
     if request.settings.silence.enabled {
         for metadata in &source_metadata {
             if !metadata.has_audio {
-                blocking_errors
-                    .push("No audio stream was detected, so silence trimming cannot run.".to_string());
+                blocking_errors.push(
+                    "No audio stream was detected, so silence trimming cannot run.".to_string(),
+                );
             }
         }
+    } else if blocking_errors.is_empty() {
+        add_selected_audio_warnings(
+            &ffmpeg,
+            &merged_selected_ranges,
+            &metadata_by_path,
+            &request.settings.silence,
+            &mut warnings,
+        );
     }
 
     let mut detected_silence_ranges = Vec::new();
@@ -981,6 +1244,8 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
                         duration: round_seconds(silence.1 - silence.0),
                         source: "detected-silence".to_string(),
                         text: None,
+                        validation_status: None,
+                        validation_reasons: vec![],
                         lead_in: None,
                         lead_out: None,
                         source_range_ids: vec![],
@@ -1009,6 +1274,8 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
                     duration: round_seconds(range.end - range.start),
                     source: "transcript-selection".to_string(),
                     text: range.text.clone(),
+                    validation_status: range.validation_status.clone(),
+                    validation_reasons: range.validation_reasons.clone(),
                     lead_in: range.lead_in,
                     lead_out: range.lead_out,
                     source_range_ids: vec![],
@@ -1029,12 +1296,16 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
 
         if final_keep_ranges.is_empty() {
             blocking_errors.push(
-                "These settings would produce an empty export, so rendering is blocked.".to_string(),
+                "These settings would produce an empty export, so rendering is blocked."
+                    .to_string(),
             );
         }
     }
 
-    let source_duration = source_metadata.iter().map(|item| item.duration).sum::<f64>();
+    let source_duration = source_metadata
+        .iter()
+        .map(|item| item.duration)
+        .sum::<f64>();
     let selected_duration = sum_durations(&merged_selected_ranges);
     let detected_silence_duration = sum_durations(&detected_silence_ranges);
     let estimated_output_duration = sum_durations(&final_keep_ranges);
@@ -1077,7 +1348,9 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
             "start": range.start,
             "end": range.end,
             "leadIn": range.lead_in,
-            "leadOut": range.lead_out
+            "leadOut": range.lead_out,
+            "validationStatus": range.validation_status,
+            "validationReasons": range.validation_reasons
         })).collect::<Vec<_>>(),
         "settings": {
             "padding": request.settings.padding,
@@ -1095,7 +1368,10 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
     .to_string();
 
     Ok(AnalysisReport {
-        id: format!("analysis_{}", generated_at.replace(':', "-").replace(".000Z", "Z")),
+        id: format!(
+            "analysis_{}",
+            generated_at.replace(':', "-").replace(".000Z", "Z")
+        ),
         fingerprint,
         fingerprint_input,
         generated_at,
@@ -1178,16 +1454,26 @@ fn render_report(request: RenderRequest) -> Result<RenderResult, String> {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(default_output_file(&workspace)));
-    if let Some(output_file) = request.output_file.as_deref().filter(|value| !value.trim().is_empty())
+    if let Some(output_file) = request
+        .output_file
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
     {
         if canonical_or_absolute(output_file) != canonical_or_absolute(&approved_output) {
-            return Err("Output file changed after approval. Run Analyze again before rendering.".to_string());
+            return Err(
+                "Output file changed after approval. Run Analyze again before rendering."
+                    .to_string(),
+            );
         }
     }
     let output_file = canonical_or_absolute(&approved_output);
     if let Some(parent) = output_file.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Could not create output folder {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create output folder {}: {error}",
+                parent.display()
+            )
+        })?;
     }
 
     let source_paths: Vec<String> = keep_ranges
@@ -1477,6 +1763,14 @@ fn read_transcript_response(
             adjusted_start: round_seconds(segment.adjusted_start.unwrap_or(segment.start)),
             adjusted_end: round_seconds(segment.adjusted_end.unwrap_or(segment.end)),
             text: segment.text.trim().to_string(),
+            avg_logprob: segment.avg_logprob,
+            compression_ratio: segment.compression_ratio,
+            no_speech_prob: segment.no_speech_prob,
+            temperature: segment.temperature,
+            words: segment.words,
+            validation: segment
+                .validation
+                .unwrap_or_else(TranscriptValidation::unknown),
             selected: segment.selected,
             timestamp_adjusted: segment.timestamp_adjusted,
         })
@@ -1550,6 +1844,8 @@ fn build_selected_ranges(
                 }
                 .to_string(),
                 text: Some(segment.text.clone()),
+                validation_status: Some(segment.validation.status.clone()),
+                validation_reasons: segment.validation.reasons.clone(),
                 lead_in: Some(request.settings.padding.lead_in),
                 lead_out: Some(request.settings.padding.lead_out),
                 source_range_ids: vec![id],
@@ -1561,9 +1857,11 @@ fn build_selected_ranges(
 fn merge_ranges(ranges: &[Range]) -> (Vec<Range>, bool) {
     let mut sorted = ranges.to_vec();
     sorted.sort_by(|a, b| {
-        a.source_video
-            .cmp(&b.source_video)
-            .then_with(|| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal))
+        a.source_video.cmp(&b.source_video).then_with(|| {
+            a.start
+                .partial_cmp(&b.start)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     });
     let mut merged: Vec<Range> = Vec::new();
     let mut had_overlap = false;
@@ -1628,11 +1926,19 @@ fn detect_silence(
     let mut open_start: Option<f64> = None;
     for line in stderr.lines() {
         if let Some(value) = parse_after(line, "silence_start:") {
-            open_start = Some(if value < start - 0.1 { value + start } else { value });
+            open_start = Some(if value < start - 0.1 {
+                value + start
+            } else {
+                value
+            });
         }
         if let Some(value) = parse_after(line, "silence_end:") {
             if let Some(raw_start) = open_start.take() {
-                let silence_end = if value < start - 0.1 { value + start } else { value };
+                let silence_end = if value < start - 0.1 {
+                    value + start
+                } else {
+                    value
+                };
                 silences.push((raw_start.max(start), silence_end.min(end)));
             }
         }
@@ -1646,13 +1952,131 @@ fn detect_silence(
         .collect())
 }
 
+fn add_selected_audio_warnings(
+    ffmpeg: &Path,
+    selected_ranges: &[Range],
+    metadata_by_path: &HashMap<String, VideoMetadata>,
+    settings: &SilenceSettings,
+    warnings: &mut Vec<String>,
+) {
+    for selected_range in selected_ranges {
+        if selected_range
+            .validation_status
+            .as_deref()
+            .is_some_and(|status| matches!(status, "bad" | "warning"))
+        {
+            continue;
+        }
+        let source_key = normalize_path_for_identity(&selected_range.source_video);
+        let has_audio = metadata_by_path
+            .get(&source_key)
+            .is_some_and(|metadata| metadata.has_audio);
+        if !has_audio {
+            continue;
+        }
+
+        let duration = (selected_range.end - selected_range.start).max(0.0);
+        if duration < settings.min_silence_seconds.max(0.2) {
+            continue;
+        }
+
+        let silences = match detect_silence(
+            ffmpeg,
+            &selected_range.source_video,
+            selected_range.start,
+            selected_range.end,
+            settings,
+        ) {
+            Ok(silences) => silences,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not inspect audio inside selected range {} - {}: {error}",
+                    format_timestamp(selected_range.start),
+                    format_timestamp(selected_range.end)
+                ));
+                continue;
+            }
+        };
+
+        let silent_duration = silence_overlap_duration(selected_range, &silences);
+        let silent_percent = if duration > 0.0 {
+            silent_duration / duration * 100.0
+        } else {
+            0.0
+        };
+        if silent_duration >= duration - 0.05 || silent_percent >= 90.0 {
+            warnings.push(format!(
+                "Selected range {} - {} is effectively silent ({:.0}% below {:.1} dB). Rendering will include this visual range, but the transcript timestamp may point at quiet audio.",
+                format_timestamp(selected_range.start),
+                format_timestamp(selected_range.end),
+                silent_percent.min(100.0),
+                settings.threshold_db
+            ));
+            continue;
+        }
+
+        let leading_silence = leading_silence_duration(selected_range, &silences);
+        if leading_silence >= 2.0 && leading_silence / duration >= 0.25 {
+            warnings.push(format!(
+                "Selected range {} - {} starts with {} of silence before audio rises above {:.1} dB.",
+                format_timestamp(selected_range.start),
+                format_timestamp(selected_range.end),
+                format_duration(leading_silence),
+                settings.threshold_db
+            ));
+        }
+    }
+}
+
+fn add_transcript_validation_warnings(selected_ranges: &[Range], warnings: &mut Vec<String>) {
+    for range in selected_ranges {
+        let Some(status) = range.validation_status.as_deref() else {
+            continue;
+        };
+        if !matches!(status, "bad" | "warning") {
+            continue;
+        }
+        let reasons = if range.validation_reasons.is_empty() {
+            "no details provided".to_string()
+        } else {
+            range.validation_reasons.join("; ")
+        };
+        warnings.push(format!(
+            "Selected transcript range {} - {} was flagged as {} during transcription: {}.",
+            format_timestamp(range.start),
+            format_timestamp(range.end),
+            status.to_uppercase(),
+            reasons
+        ));
+    }
+}
+
+fn silence_overlap_duration(range: &Range, silences: &[(f64, f64)]) -> f64 {
+    silences
+        .iter()
+        .map(|(start, end)| ((*end).min(range.end) - (*start).max(range.start)).max(0.0))
+        .sum()
+}
+
+fn leading_silence_duration(range: &Range, silences: &[(f64, f64)]) -> f64 {
+    silences
+        .iter()
+        .find(|(start, end)| *start <= range.start + 0.05 && *end > range.start)
+        .map(|(_, end)| ((*end).min(range.end) - range.start).max(0.0))
+        .unwrap_or(0.0)
+}
+
 fn parse_after(line: &str, label: &str) -> Option<f64> {
     line.split_once(label)
         .and_then(|(_, rest)| rest.trim().split_whitespace().next())
         .and_then(|value| value.parse().ok())
 }
 
-fn silence_to_keep_ranges(selected_range: &Range, silences: &[(f64, f64)], settings: &SilenceSettings) -> (Vec<Range>, f64) {
+fn silence_to_keep_ranges(
+    selected_range: &Range,
+    silences: &[(f64, f64)],
+    settings: &SilenceSettings,
+) -> (Vec<Range>, f64) {
     let mut keep = Vec::new();
     let mut cursor = selected_range.start;
     let mut sorted_silences = silences.to_vec();
@@ -1695,6 +2119,8 @@ fn silence_to_keep_ranges(selected_range: &Range, silences: &[(f64, f64)], setti
             duration: round_seconds(duration),
             source: "silence-trim-within-transcript-selection".to_string(),
             text: selected_range.text.clone(),
+            validation_status: selected_range.validation_status.clone(),
+            validation_reasons: selected_range.validation_reasons.clone(),
             lead_in: selected_range.lead_in,
             lead_out: selected_range.lead_out,
             source_range_ids: vec![selected_range.id.clone()],
@@ -1765,7 +2191,11 @@ fn default_output_file(workspace: &Path) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
         .replace(':', "-")
         .replace(".000Z", "");
-    path_to_string(&workspace.join("renders").join(format!("VidVerba-export-{stamp}.mp4")))
+    path_to_string(
+        &workspace
+            .join("renders")
+            .join(format!("VidVerba-export-{stamp}.mp4")),
+    )
 }
 
 fn sum_durations(ranges: &[Range]) -> f64 {

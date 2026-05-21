@@ -78,7 +78,13 @@
             <div class="toolbar">
               <div class="field compact">
                 <label for="model-input">Model</label>
-                <input id="model-input" value="base">
+                <select id="model-input">
+                  <option value="tiny">Tiny (tiny)</option>
+                  <option value="base">Base (base)</option>
+                  <option value="small">Fast Draft (small)</option>
+                  <option value="medium" selected>Balanced (medium)</option>
+                  <option value="large-v3">Best Accuracy (large-v3)</option>
+                </select>
               </div>
               <div class="field compact">
                 <label for="language-input">Language</label>
@@ -87,8 +93,9 @@
               <div class="field compact">
                 <label for="device-input">Device</label>
                 <select id="device-input">
-                  <option value="cpu">cpu</option>
+                  <option value="auto">auto</option>
                   <option value="cuda">cuda</option>
+                  <option value="cpu">cpu</option>
                 </select>
               </div>
               <button id="load-transcript" type="button">Load Transcript</button>

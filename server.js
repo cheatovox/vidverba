@@ -5,6 +5,13 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+// Legacy/dev-only HTTP preview server.
+//
+// Production VidVerba is the Tauri desktop app in src-tauri. The frontend assets
+// under public/ are bundled by Tauri and talk to Rust commands through
+// window.__TAURI__; they are not intended to run as a standalone browser app.
+// Keep production behavior in src-tauri/src/lib.rs, not in this file.
+
 const __filename = fileURLToPath(import.meta.url);
 const appRoot = path.dirname(__filename);
 const repoRoot = path.resolve(appRoot, "..");
@@ -15,6 +22,19 @@ const renderRoot = path.join(appRoot, "renders");
 
 const PORT = Number(process.env.PORT || 5178);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".webm"]);
+const DEFAULT_TRANSCRIPTION_MODEL = "medium";
+const TRANSCRIPTION_MODELS = new Set(["tiny", "base", "small", "medium", "large-v3"]);
+const DEFAULT_VAD_MIN_SILENCE_MS = 500;
+const DEFAULT_HALLUCINATION_SILENCE_THRESHOLD = 1.0;
+const DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB = -39;
+const LEGACY_DEV_SERVER_ENABLED = process.argv.includes("--legacy-dev-server");
+const LEGACY_BROWSER_API_ENABLED = process.argv.includes("--with-legacy-api");
+
+if (!LEGACY_DEV_SERVER_ENABLED) {
+  console.error("server.js is legacy/dev-only. Use `npm start` for the Tauri desktop app.");
+  console.error("For a static browser preview, run `npm run legacy:web`.");
+  process.exit(1);
+}
 
 fs.mkdirSync(transcriptRoot, { recursive: true });
 fs.mkdirSync(renderRoot, { recursive: true });
@@ -87,6 +107,11 @@ function normalizePathForIdentity(inputPath) {
 
 function roundSeconds(value) {
   return Math.max(0, Math.round(Number(value || 0) * 1000) / 1000);
+}
+
+function normalizeTranscriptionModel(value) {
+  const model = String(value || "").trim();
+  return TRANSCRIPTION_MODELS.has(model) ? model : DEFAULT_TRANSCRIPTION_MODEL;
 }
 
 function stableValue(value) {
@@ -272,6 +297,12 @@ function normalizeTranscript(sourcePath, raw, transcriptPath) {
     adjustedStart: roundSeconds(segment.adjustedStart ?? segment.start),
     adjustedEnd: roundSeconds(segment.adjustedEnd ?? segment.end),
     text: String(segment.text || "").trim(),
+    avgLogprob: optionalNumber(segment.avgLogprob ?? segment.avg_logprob),
+    compressionRatio: optionalNumber(segment.compressionRatio ?? segment.compression_ratio),
+    noSpeechProb: optionalNumber(segment.noSpeechProb ?? segment.no_speech_prob),
+    temperature: optionalNumber(segment.temperature),
+    words: normalizeWords(segment.words),
+    validation: normalizeValidation(segment.validation),
     selected: Boolean(segment.selected),
     timestampAdjusted: Boolean(segment.timestampAdjusted),
   }));
@@ -280,6 +311,50 @@ function normalizeTranscript(sourcePath, raw, transcriptPath) {
     metadata: raw.metadata || {},
     transcript: raw.transcript || "",
     segments,
+  };
+}
+
+function optionalNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeWords(words) {
+  return Array.isArray(words)
+    ? words.map((word) => ({
+        start: roundSeconds(word.start),
+        end: roundSeconds(word.end),
+        word: String(word.word || ""),
+        probability: optionalNumber(word.probability),
+      }))
+    : [];
+}
+
+function unknownValidation() {
+  return {
+    status: "unknown",
+    reasons: ["no confidence metadata available"],
+    silentDuration: null,
+    silentPercent: null,
+    leadingSilence: null,
+    meanWordProbability: null,
+  };
+}
+
+function normalizeValidation(validation) {
+  if (!validation || typeof validation !== "object") return unknownValidation();
+  const status = ["ok", "warning", "bad", "unknown"].includes(validation.status)
+    ? validation.status
+    : "unknown";
+  return {
+    status,
+    reasons: Array.isArray(validation.reasons) ? validation.reasons.map(String) : [],
+    silentDuration: optionalNumber(validation.silentDuration ?? validation.silent_duration),
+    silentPercent: optionalNumber(validation.silentPercent ?? validation.silent_percent),
+    leadingSilence: optionalNumber(validation.leadingSilence ?? validation.leading_silence),
+    meanWordProbability: optionalNumber(
+      validation.meanWordProbability ?? validation.mean_word_probability,
+    ),
   };
 }
 
@@ -310,13 +385,25 @@ async function loadOrRunTranscript(body) {
     "-OutputDir",
     transcriptRoot,
     "-Model",
-    body.model || "base",
+    normalizeTranscriptionModel(body.model),
     "-Device",
-    body.device || "cpu",
+    body.device || "auto",
     "-ComputeType",
     body.computeType || "auto",
     "-BeamSize",
     String(body.beamSize || 5),
+    "-VadFilter",
+    String(body.vadFilter ?? true),
+    "-VadMinSilenceMs",
+    String(body.vadMinSilenceMs || DEFAULT_VAD_MIN_SILENCE_MS),
+    "-WordTimestamps",
+    String(body.wordTimestamps ?? true),
+    "-ConditionOnPreviousText",
+    String(body.conditionOnPreviousText ?? false),
+    "-HallucinationSilenceThreshold",
+    String(body.hallucinationSilenceThreshold || DEFAULT_HALLUCINATION_SILENCE_THRESHOLD),
+    "-SilenceThresholdDb",
+    String(body.silenceThresholdDb || DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB),
   ];
   if (body.language) {
     args.push("-Language", body.language);
@@ -408,6 +495,74 @@ async function detectSilence(sourceVideo, start, end, settings) {
   return silences.filter((range) => range.end > range.start);
 }
 
+async function addSelectedAudioWarnings(selectedRanges, metadataByPath, settings, warnings) {
+  const minSilenceSeconds = Number(settings.minSilenceSeconds ?? 0.6);
+  const thresholdDb = Number(settings.thresholdDb ?? -39);
+  for (const selectedRange of selectedRanges) {
+    if (["bad", "warning"].includes(selectedRange.validationStatus)) continue;
+    const metadata = metadataByPath.get(normalizePathForIdentity(selectedRange.sourceVideo));
+    if (!metadata?.hasAudio) continue;
+
+    const duration = Math.max(0, selectedRange.end - selectedRange.start);
+    if (duration < Math.max(minSilenceSeconds, 0.2)) continue;
+
+    let silences = [];
+    try {
+      silences = await detectSilence(
+        selectedRange.sourceVideo,
+        selectedRange.start,
+        selectedRange.end,
+        settings,
+      );
+    } catch (error) {
+      warnings.push(
+        `Could not inspect audio inside selected range ${formatTimestamp(selectedRange.start)} - ${formatTimestamp(selectedRange.end)}: ${error.message}`,
+      );
+      continue;
+    }
+
+    const silentDuration = silenceOverlapDuration(selectedRange, silences);
+    const silentPercent = duration > 0 ? (silentDuration / duration) * 100 : 0;
+    if (silentDuration >= duration - 0.05 || silentPercent >= 90) {
+      warnings.push(
+        `Selected range ${formatTimestamp(selectedRange.start)} - ${formatTimestamp(selectedRange.end)} is effectively silent (${Math.min(100, silentPercent).toFixed(0)}% below ${thresholdDb.toFixed(1)} dB). Rendering will include this visual range, but the transcript timestamp may point at quiet audio.`,
+      );
+      continue;
+    }
+
+    const leadingSilence = leadingSilenceDuration(selectedRange, silences);
+    if (leadingSilence >= 2 && leadingSilence / duration >= 0.25) {
+      warnings.push(
+        `Selected range ${formatTimestamp(selectedRange.start)} - ${formatTimestamp(selectedRange.end)} starts with ${formatDuration(leadingSilence)} of silence before audio rises above ${thresholdDb.toFixed(1)} dB.`,
+      );
+    }
+  }
+}
+
+function addTranscriptValidationWarnings(selectedRanges, warnings) {
+  for (const range of selectedRanges) {
+    if (!["bad", "warning"].includes(range.validationStatus)) continue;
+    const reasons = range.validationReasons?.length
+      ? range.validationReasons.join("; ")
+      : "no details provided";
+    warnings.push(
+      `Selected transcript range ${formatTimestamp(range.start)} - ${formatTimestamp(range.end)} was flagged as ${range.validationStatus.toUpperCase()} during transcription: ${reasons}.`,
+    );
+  }
+}
+
+function silenceOverlapDuration(range, silences) {
+  return silences.reduce(
+    (total, silence) => total + Math.max(0, Math.min(silence.end, range.end) - Math.max(silence.start, range.start)),
+    0,
+  );
+}
+
+function leadingSilenceDuration(range, silences) {
+  const leading = silences.find((silence) => silence.start <= range.start + 0.05 && silence.end > range.start);
+  return leading ? Math.max(0, Math.min(leading.end, range.end) - range.start) : 0;
+}
+
 function silenceToKeepRanges(sourceVideo, sourceRangeId, start, end, silences, settings) {
   const minClipSeconds = Number(settings.minClipSeconds ?? 0.3);
   const frontPaddingSeconds = Number(settings.frontPaddingSeconds ?? 0);
@@ -483,6 +638,8 @@ function buildSelectedRanges(body, metadataByPath) {
         ? "transcript-selection-with-adjusted-timestamps"
         : "transcript-selection",
       text: segment.text || "",
+      validationStatus: segment.validation?.status || "unknown",
+      validationReasons: segment.validation?.reasons || [],
       sourceRangeIds: [`range_${String(index + 1).padStart(6, "0")}`],
     };
   });
@@ -536,6 +693,7 @@ async function analyzePlan(body) {
   if (hadOverlap) {
     warnings.push("Selected ranges overlap and will be merged before analysis.");
   }
+  addTranscriptValidationWarnings(selectedRanges, warnings);
 
   const silenceSettings = settings.silence || {};
   if (silenceSettings.enabled) {
@@ -544,6 +702,8 @@ async function analyzePlan(body) {
         blockingErrors.push("No audio stream was detected, so silence trimming cannot run.");
       }
     }
+  } else if (blockingErrors.length === 0) {
+    await addSelectedAudioWarnings(selectedRanges, metadataByPath, silenceSettings, warnings);
   }
 
   const detectedSilenceRanges = [];
@@ -589,6 +749,8 @@ async function analyzePlan(body) {
         end: range.end,
         duration: roundSeconds(range.end - range.start),
         source: "transcript-selection",
+        validationStatus: range.validationStatus,
+        validationReasons: range.validationReasons,
       }));
     }
 
@@ -630,6 +792,8 @@ async function analyzePlan(body) {
       end: range.end,
       leadIn: range.leadIn,
       leadOut: range.leadOut,
+      validationStatus: range.validationStatus,
+      validationReasons: range.validationReasons,
     })),
     settings: {
       padding: settings.padding || {},
@@ -844,6 +1008,13 @@ async function handleApi(req, res) {
 
 const server = http.createServer((req, res) => {
   if (req.url?.startsWith("/api/")) {
+    if (!LEGACY_BROWSER_API_ENABLED) {
+      sendJson(res, 410, {
+        error:
+          "The legacy browser API is disabled. Production VidVerba uses Tauri commands from the desktop shell.",
+      });
+      return;
+    }
     handleApi(req, res);
     return;
   }
@@ -851,5 +1022,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`VidVerba is running at http://localhost:${PORT}`);
+  console.log(`VidVerba legacy dev-only preview is running at http://localhost:${PORT}`);
+  console.log("Production uses the Tauri desktop shell and bundled frontend assets.");
 });

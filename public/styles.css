@@ -462,6 +462,18 @@ p {
   border-color: #d7a94f;
 }
 
+.segment-row.quality-warning {
+  border-left: 4px solid #d7a94f;
+}
+
+.segment-row.quality-bad {
+  border-left: 4px solid #cf5c5c;
+}
+
+.segment-row.quality-unknown {
+  border-left: 4px solid #9aa4b2;
+}
+
 .segment-row input[type="checkbox"] {
   width: 18px;
   min-height: 18px;
@@ -481,6 +493,53 @@ p {
   margin-top: 4px;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.segment-quality-note {
+  margin-top: 5px;
+  color: #7a4b12;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.segment-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.quality-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #eef1f5;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.quality-badge.ok {
+  background: #e6f4ec;
+  color: #24724a;
+}
+
+.quality-badge.warning {
+  background: #fff2d9;
+  color: #8b5a12;
+}
+
+.quality-badge.bad {
+  background: #ffe4e2;
+  color: #a33f36;
+}
+
+.quality-badge.unknown {
+  background: #edf0f4;
+  color: #596579;
 }
 
 .pill {

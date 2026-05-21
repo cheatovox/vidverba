@@ -5,10 +5,13 @@
   "description": "Local clip selection UI for transcript-guided video exports.",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "tauri dev",
+    "dev": "tauri dev",
     "desktop": "tauri dev",
     "desktop:build": "tauri build",
-    "check": "node --check server.js",
+    "legacy:web": "node server.js --legacy-dev-server",
+    "check": "node --check public/app.js",
+    "check:legacy-web": "node --check server.js",
     "check:desktop": "tauri info"
   },
   "dependencies": {
