@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -154,6 +155,17 @@ def format_srt_timestamp(seconds: float) -> str:
     return format_timestamp(seconds).replace(".", ",")
 
 
+def format_compact_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "unknown"
+    total_seconds = max(0, int(round(float(seconds))))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, whole_seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{whole_seconds:02d}"
+    return f"{minutes}:{whole_seconds:02d}"
+
+
 def round_seconds(value: float | None) -> float | None:
     if value is None:
         return None
@@ -166,6 +178,12 @@ def round_probability(value: float | None) -> float | None:
     return round(float(value), 4)
 
 
+def format_realtime_speed(speed: float | None) -> str:
+    if speed is None:
+        return "unknown"
+    return f"{speed:.2f}x realtime"
+
+
 def transcript_md(metadata: dict[str, Any], segments: list[Segment], transcript: str) -> str:
     lines = [
         f"# Transcript: {metadata['title']}",
@@ -173,19 +191,30 @@ def transcript_md(metadata: dict[str, Any], segments: list[Segment], transcript:
         "## Metadata",
         f"- Source file: `{metadata['source_file']}`",
         f"- Recording timestamp: `{metadata.get('recorded_at') or 'unknown'}`",
+        f"- Duration: `{format_compact_duration(metadata.get('duration_seconds'))}`",
+        f"- Transcription time: `{format_compact_duration(metadata.get('transcription_time_seconds'))}`",
+        f"- Speed: `{format_realtime_speed(metadata.get('speed_realtime'))}`",
         f"- Model: `{metadata.get('model') or 'unknown'}`",
         f"- Language: `{metadata.get('language') or 'auto'}`",
-        f"- Device: `{metadata.get('device') or 'auto'}`",
+        f"- Requested device: `{metadata.get('requested_device') or 'auto'}`",
+        f"- Actual device: `{metadata.get('actual_device') or metadata.get('device') or 'auto'}`",
+        f"- Compute type: `{metadata.get('compute_type') or 'auto'}`",
         f"- VAD filter: `{metadata.get('vad_filter')}`",
         f"- Word timestamps: `{metadata.get('word_timestamps')}`",
-        "",
-        "## Full Transcript",
-        "",
-        transcript.strip() or "_No transcript text generated._",
-        "",
-        "## Timestamped Segments",
-        "",
     ]
+    if metadata.get("cpu_fallback_reason"):
+        lines.append(f"- CPU fallback reason: `{metadata.get('cpu_fallback_reason')}`")
+    lines.extend(
+        [
+            "",
+            "## Full Transcript",
+            "",
+            transcript.strip() or "_No transcript text generated._",
+            "",
+            "## Timestamped Segments",
+            "",
+        ]
+    )
     if not segments:
         lines.append("_No timestamped segments available._")
     else:
@@ -221,6 +250,15 @@ def resolve_device(device: str) -> str:
     return "cuda" if shutil.which("nvidia-smi") else "cpu"
 
 
+def summarize_failures(failures: list[str]) -> str:
+    reason = "; ".join(failures[:2])
+    if len(failures) > 2:
+        reason += f"; {len(failures) - 2} more CUDA attempts failed"
+    if len(reason) > 700:
+        reason = reason[:697].rstrip() + "..."
+    return reason
+
+
 def load_whisper_model(model_name: str, requested_device: str, compute_type: str):
     try:
         from faster_whisper import WhisperModel
@@ -236,6 +274,7 @@ def load_whisper_model(model_name: str, requested_device: str, compute_type: str
             WhisperModel(model_name, device="cpu", compute_type=effective_compute_type),
             "cpu",
             effective_compute_type,
+            None,
         )
 
     cuda_compute_types = ["float16"] if compute_type == "auto" else [compute_type]
@@ -249,6 +288,7 @@ def load_whisper_model(model_name: str, requested_device: str, compute_type: str
                 WhisperModel(model_name, device=device, compute_type=cuda_compute_type),
                 device,
                 cuda_compute_type,
+                None,
             )
         except Exception as exc:
             failures.append(f"{device}/{cuda_compute_type}: {exc}")
@@ -259,7 +299,12 @@ def load_whisper_model(model_name: str, requested_device: str, compute_type: str
 
     print("Falling back to CPU int8 after CUDA failures.", file=sys.stderr)
     try:
-        return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
+        return (
+            WhisperModel(model_name, device="cpu", compute_type="int8"),
+            "cpu",
+            "int8",
+            f"CUDA model load failed; {summarize_failures(failures)}",
+        )
     except Exception as exc:
         raise RuntimeError(
             "Could not load faster-whisper on CUDA or CPU.\n" + "\n".join(failures)
@@ -440,7 +485,7 @@ def transcribe_file(
     model: Any,
     input_path: Path,
     args: argparse.Namespace,
-) -> tuple[list[Segment], str, str | None, float | None]:
+) -> tuple[list[Segment], str, str | None, float | None, float | None]:
     result, info = model.transcribe(
         str(input_path),
         language=args.language,
@@ -452,6 +497,7 @@ def transcribe_file(
         hallucination_silence_threshold=args.hallucination_silence_threshold if args.word_timestamps else None,
     )
     raw_segments = list(result)
+    duration_seconds = getattr(info, "duration", None)
     fallback_end = max([getattr(segment, "end", 0.0) for segment in raw_segments] + [0.0])
     silence_ranges = detect_silence_ranges(
         input_path=input_path,
@@ -464,7 +510,7 @@ def transcribe_file(
     transcript = collapse_whitespace(" ".join(segment.text for segment in segments))
     detected_language = getattr(info, "language", None)
     language_probability = getattr(info, "language_probability", None)
-    return segments, transcript, detected_language, language_probability
+    return segments, transcript, detected_language, language_probability, duration_seconds or fallback_end
 
 
 def output_paths(output_dir: Path, input_path: Path) -> dict[str, Path]:
@@ -510,7 +556,11 @@ def main() -> int:
         return 0
 
     try:
-        model, resolved_device, effective_compute_type = load_whisper_model(args.model, args.device, args.compute_type)
+        model, resolved_device, effective_compute_type, cpu_fallback_reason = load_whisper_model(
+            args.model,
+            args.device,
+            args.compute_type,
+        )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         if args.device != "cpu":
@@ -524,8 +574,10 @@ def main() -> int:
             continue
 
         print(f"Transcribing {input_path.name} with {args.model} on {resolved_device} ...")
+        transcription_started_at = time.perf_counter()
+        file_cpu_fallback_reason = cpu_fallback_reason
         try:
-            segments, transcript, detected_language, language_probability = transcribe_file(
+            segments, transcript, detected_language, language_probability, duration_seconds = transcribe_file(
                 model=model,
                 input_path=input_path,
                 args=args,
@@ -533,23 +585,39 @@ def main() -> int:
         except Exception as exc:
             if resolved_device == "cpu":
                 raise
-            print(f"Transcription failed on {resolved_device}: {exc}", file=sys.stderr)
+            failure_reason = f"Transcription failed on {resolved_device}: {exc}"
+            print(failure_reason, file=sys.stderr)
             print("Retrying transcription on CPU int8.", file=sys.stderr)
-            model, resolved_device, effective_compute_type = load_whisper_model(args.model, "cpu", "int8")
-            segments, transcript, detected_language, language_probability = transcribe_file(
+            model, resolved_device, effective_compute_type, _ = load_whisper_model(args.model, "cpu", "int8")
+            file_cpu_fallback_reason = failure_reason
+            cpu_fallback_reason = failure_reason
+            segments, transcript, detected_language, language_probability, duration_seconds = transcribe_file(
                 model=model,
                 input_path=input_path,
                 args=args,
             )
+        transcription_time_seconds = time.perf_counter() - transcription_started_at
+        speed_realtime = (
+            duration_seconds / transcription_time_seconds
+            if duration_seconds is not None and transcription_time_seconds > 0
+            else None
+        )
         metadata = {
             "title": input_path.stem.strip(),
             "source_file": input_path.name,
             "recorded_at": parse_recorded_at(input_path.name),
+            "duration_seconds": round_seconds(duration_seconds),
+            "transcription_time_seconds": round_seconds(transcription_time_seconds),
+            "speed_realtime": round_probability(speed_realtime),
             "model": args.model,
             "language": args.language or detected_language,
             "language_probability": round_probability(language_probability),
+            "requested_device": args.device,
             "device": resolved_device,
+            "actual_device": resolved_device,
+            "requested_compute_type": args.compute_type,
             "compute_type": effective_compute_type,
+            "cpu_fallback_reason": file_cpu_fallback_reason,
             "beam_size": args.beam_size,
             "vad_filter": args.vad_filter,
             "vad_min_silence_ms": args.vad_min_silence_ms,

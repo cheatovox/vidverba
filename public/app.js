@@ -23,6 +23,7 @@ const state = {
   sourceVideos: [],
   transcriptSegments: [],
   transcriptPath: "",
+  transcriptMetadata: null,
   planState: "draft",
   report: null,
   renderResult: null,
@@ -83,6 +84,46 @@ function formatDuration(seconds) {
   const minutes = Math.floor(value / 60);
   const sec = value % 60;
   return minutes > 0 ? `${minutes}m ${sec.toFixed(1)}s` : `${sec.toFixed(1)}s`;
+}
+
+function formatClockDuration(seconds) {
+  const number = Number(seconds);
+  if (!Number.isFinite(number) || number < 0) return "unknown";
+  const totalSeconds = Math.round(number);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const sec = totalSeconds % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${minutes}:${String(sec).padStart(2, "0")}`;
+}
+
+function optionalMetricNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function metadataValue(metadata, ...keys) {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return null;
+}
+
+function formatDeviceLabel(value) {
+  const label = String(value || "unknown");
+  if (label.toLowerCase() === "cuda") return "CUDA";
+  if (label.toLowerCase() === "cpu") return "CPU";
+  if (label.toLowerCase() === "auto") return "Auto";
+  return label;
+}
+
+function formatRealtimeSpeed(speed, duration, transcriptionTime) {
+  const explicit = optionalMetricNumber(speed);
+  const calculated =
+    explicit ?? (duration && transcriptionTime ? optionalMetricNumber(duration) / optionalMetricNumber(transcriptionTime) : null);
+  return Number.isFinite(calculated) && calculated > 0 ? `${calculated.toFixed(2)}x realtime` : "unknown";
 }
 
 function segmentDuration(segment) {
@@ -378,6 +419,7 @@ function renderTranscript() {
   $("#transcript-status").textContent = state.transcriptSegments.length
     ? `${state.transcriptSegments.length} segments loaded from ${state.transcriptPath || "transcript data"}. Quality: ${counts.ok} OK, ${counts.warning} review, ${counts.bad} bad, ${counts.unknown} unknown.`
     : "No transcript loaded.";
+  renderTranscriptMetrics();
   $("#transcript-preview").innerHTML = state.transcriptSegments
     .slice(0, 80)
     .map(
@@ -385,6 +427,44 @@ function renderTranscript() {
         <p>${qualityBadge(segment)} <strong>${formatTimestamp(segment.adjustedStart)} - ${formatTimestamp(segment.adjustedEnd)}</strong> ${escapeHtml(segment.text)}</p>
       `,
     )
+    .join("");
+}
+
+function renderTranscriptMetrics() {
+  const metrics = $("#transcript-metrics");
+  if (!state.transcriptSegments.length) {
+    metrics.innerHTML = "";
+    return;
+  }
+  const metadata = state.transcriptMetadata || {};
+  const sourceDuration = state.sourceVideos[0]?.duration;
+  const duration = optionalMetricNumber(metadataValue(metadata, "duration_seconds", "durationSeconds")) ?? sourceDuration;
+  const transcriptionTime = optionalMetricNumber(
+    metadataValue(metadata, "transcription_time_seconds", "transcriptionTimeSeconds"),
+  );
+  const fallbackReason = metadataValue(metadata, "cpu_fallback_reason", "cpuFallbackReason");
+  const rows = [
+    ["Duration", formatClockDuration(duration)],
+    ["Transcription Time", formatClockDuration(transcriptionTime)],
+    [
+      "Speed",
+      formatRealtimeSpeed(
+        metadataValue(metadata, "speed_realtime", "speedRealtime"),
+        duration,
+        transcriptionTime,
+      ),
+    ],
+    ["Model", metadataValue(metadata, "model") || selectedTranscriptionModel()],
+    [
+      "Requested Device",
+      formatDeviceLabel(metadataValue(metadata, "requested_device", "requestedDevice") || $("#device-input").value),
+    ],
+    ["Actual Device", formatDeviceLabel(metadataValue(metadata, "actual_device", "actualDevice", "device"))],
+    ["Compute", metadataValue(metadata, "compute_type", "computeType") || "unknown"],
+    ...(fallbackReason ? [["CPU Fallback", fallbackReason]] : []),
+  ];
+  metrics.innerHTML = rows
+    .map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`)
     .join("");
 }
 
@@ -571,6 +651,7 @@ async function selectSource(sourcePath) {
     state.sourceVideos = data.videos;
     state.transcriptSegments = [];
     state.transcriptPath = "";
+    state.transcriptMetadata = null;
     state.report = null;
     state.planState = "draft";
     showNotice("");
@@ -651,6 +732,7 @@ async function loadTranscript(force) {
     });
     state.transcriptSegments = data.segments;
     state.transcriptPath = data.path || "";
+    state.transcriptMetadata = data.metadata || null;
     state.report = null;
     state.planState = "draft";
     showNotice(data.reusedExisting ? "Loaded an existing transcript." : "Transcript generated.");

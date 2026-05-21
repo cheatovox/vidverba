@@ -1,6 +1,6 @@
 # Objective: Rebuild VidVerba into a Human-Friendly Clip Selection UI
 
-VidVerba should become a human-usable local desktop or local web interface for reviewing, selecting, analyzing, and exporting video clips.
+VidVerba should become a human-usable local Tauri desktop interface for reviewing, selecting, analyzing, and exporting video clips.
 
 The future UI is the product target. Existing PowerShell and command-line scripts can be reused as implementation references or backend helpers, but their current user-facing workflows do not need to remain compatible for this rebuild.
 
@@ -35,7 +35,11 @@ Recommended stack:
 - Processing backend: FFmpeg + ffprobe
 - Transcription: faster-whisper, GPU-enabled when stable
 - Editing-friendly export: H.264/AAC CFR MP4
-- UI: VidVerba as a local desktop app or local web UI wrapping reusable backend operations
+- UI: VidVerba as a Tauri desktop app wrapping reusable backend operations
+
+## Runtime Boundary
+
+VidVerba is not a local website. Do not build or preserve a Node server, HTTP API fallback, browser preview, localhost testing path, or alternate data compatibility layer for a removed web runtime. The frontend is bundled into the Tauri app and talks to the Rust backend through Tauri commands.
 
 ## Core Workflow
 
@@ -267,7 +271,7 @@ Recommended approach:
 - Extract shared video operations into reusable backend functions.
 - Keep FFmpeg/ffprobe operations centralized.
 - Represent transcript segments, selected ranges, analysis reports, and render plans as structured JSON.
-- Let the UI call backend commands or APIs with structured inputs.
+- Let the UI call Tauri backend commands with structured inputs.
 - Use existing PowerShell scripts only as references or temporary internal helpers where useful.
 
 ## Report Fingerprint

@@ -372,6 +372,11 @@ p {
   gap: 9px;
 }
 
+.transcript-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
 .metric {
   background: #f7f9fc;
   border: 1px solid var(--line);
@@ -675,6 +680,7 @@ p {
 
   .field-row,
   .metadata-grid,
+  .transcript-metrics,
   .report-summary,
   .desktop-settings-grid,
   .dependency-grid {
