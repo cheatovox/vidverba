@@ -52,6 +52,7 @@
               <label>Python <input id="python-path" placeholder="auto-detect from PATH"></label>
             </div>
             <div id="dependency-grid" class="dependency-grid"></div>
+            <p class="status-line runtime-note">CUDA acceleration is optional and user-managed. VidVerba can use NVIDIA runtime support when it is available to Python; otherwise transcription runs on CPU.</p>
           </div>
 
           <div class="two-column">
@@ -98,6 +99,7 @@
                   <option value="cpu">cpu</option>
                 </select>
               </div>
+              <p class="status-line runtime-note">CUDA is optional for speed. Auto/CUDA tries NVIDIA runtime support first and records a CPU fallback when CUDA is unavailable.</p>
               <button id="load-transcript" type="button">Load Transcript</button>
               <button id="force-transcript" class="secondary" type="button">Run Fresh</button>
             </div>

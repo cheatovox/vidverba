@@ -11,6 +11,22 @@ There is no supported web app, website preview, browser fallback, HTTP API, loca
 - Check frontend syntax with `npm run check`.
 - Check the desktop/Tauri environment with `npm run check:desktop`.
 
+## Transcription Runtime
+
+VidVerba shells out to the user's configured Python runtime for transcription. Public builds should treat these as user-managed dependencies:
+
+- Required for transcription: Python 3 with `faster-whisper` installed.
+- Required for video probing/rendering: `ffmpeg` and `ffprobe`.
+- Optional for faster transcription: NVIDIA GPU runtime support available to that Python process, including CUDA/cuBLAS/cuDNN libraries compatible with the installed `ctranslate2`/`faster-whisper` stack.
+
+CUDA is a performance recommendation, not a hard requirement. VidVerba does not bundle or install NVIDIA runtime libraries for public users. If `auto` or `cuda` is selected and CUDA model loading or transcription fails, the helper retries with CPU `int8` and records the CPU fallback reason in the transcript metadata. CPU transcription remains the supported fallback path.
+
+For local development only, the project `.venv` can satisfy CUDA DLL lookup with NVIDIA's Python runtime packages:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12
+```
+
 The frontend in `public/` is bundled by Tauri through `src-tauri/tauri.conf.json`. App behavior must go through `window.__TAURI__` commands handled by `src-tauri/src/lib.rs`. If `window.__TAURI__` is missing, that is a failed launch path, not a cue to add a browser workaround.
 
 ## Hard Boundary

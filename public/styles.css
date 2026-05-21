@@ -289,6 +289,16 @@ p {
   overflow-wrap: anywhere;
 }
 
+.runtime-note {
+  margin-top: 10px;
+  max-width: 860px;
+}
+
+.toolbar .runtime-note {
+  flex: 1 1 280px;
+  margin-top: 0;
+}
+
 .root-row {
   display: flex;
   flex-wrap: wrap;

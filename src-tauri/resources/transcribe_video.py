@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -19,11 +20,53 @@ DEFAULT_VAD_MIN_SILENCE_MS = 500
 DEFAULT_HALLUCINATION_SILENCE_THRESHOLD = 1.0
 DEFAULT_SILENCE_THRESHOLD_DB = -39.0
 DEFAULT_SILENCE_MIN_SECONDS = 0.2
+CUDA_DLL_PATH_BOOTSTRAP_ENV = "VIDVERBA_CUDA_DLL_PATH_BOOTSTRAPPED"
+NVIDIA_DLL_PACKAGE_BINS = [
+    Path("nvidia") / "cublas" / "bin",
+    Path("nvidia") / "cuda_runtime" / "bin",
+    Path("nvidia") / "cudnn" / "bin",
+]
 
 FILENAME_STAMPS = [
     re.compile(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2})-(\d{2})-(\d{2})"),
     re.compile(r"(\d{6})_(\d{6})"),
 ]
+
+
+def ensure_cuda_dll_paths() -> None:
+    if os.name != "nt" or os.environ.get(CUDA_DLL_PATH_BOOTSTRAP_ENV) == "1":
+        return
+    try:
+        import site
+    except Exception:
+        return
+
+    site_roots = [Path(path) for path in site.getsitepackages()]
+    user_site = site.getusersitepackages()
+    if user_site:
+        site_roots.append(Path(user_site))
+
+    existing_path = os.environ.get("PATH", "")
+    existing_entries = {entry.casefold() for entry in existing_path.split(os.pathsep) if entry}
+    dll_dirs: list[str] = []
+    for root in site_roots:
+        for relative_path in NVIDIA_DLL_PACKAGE_BINS:
+            dll_dir = root / relative_path
+            dll_dir_text = str(dll_dir)
+            if dll_dir.is_dir() and dll_dir_text.casefold() not in existing_entries:
+                dll_dirs.append(dll_dir_text)
+
+    if not dll_dirs:
+        return
+
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join(dll_dirs + [existing_path])
+    env[CUDA_DLL_PATH_BOOTSTRAP_ENV] = "1"
+    result = subprocess.run([sys.executable, *sys.argv], env=env)
+    raise SystemExit(result.returncode)
+
+
+ensure_cuda_dll_paths()
 
 
 @dataclass

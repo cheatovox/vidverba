@@ -4,10 +4,17 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 
+CUDA_DLL_PATH_BOOTSTRAP_ENV = "VIDVERBA_CUDA_DLL_PATH_BOOTSTRAPPED"
+NVIDIA_DLL_PACKAGE_BINS = [
+    Path("nvidia") / "cublas" / "bin",
+    Path("nvidia") / "cuda_runtime" / "bin",
+    Path("nvidia") / "cudnn" / "bin",
+]
 DLL_NAMES = [
     "cublas64_12.dll",
     "cublasLt64_12.dll",
@@ -15,6 +22,42 @@ DLL_NAMES = [
     "cudnn64_9.dll",
     "cudnn_ops64_9.dll",
 ]
+
+
+def ensure_cuda_dll_paths() -> None:
+    if os.name != "nt" or os.environ.get(CUDA_DLL_PATH_BOOTSTRAP_ENV) == "1":
+        return
+    try:
+        import site
+    except Exception:
+        return
+
+    site_roots = [Path(path) for path in site.getsitepackages()]
+    user_site = site.getusersitepackages()
+    if user_site:
+        site_roots.append(Path(user_site))
+
+    existing_path = os.environ.get("PATH", "")
+    existing_entries = {entry.casefold() for entry in existing_path.split(os.pathsep) if entry}
+    dll_dirs: list[str] = []
+    for root in site_roots:
+        for relative_path in NVIDIA_DLL_PACKAGE_BINS:
+            dll_dir = root / relative_path
+            dll_dir_text = str(dll_dir)
+            if dll_dir.is_dir() and dll_dir_text.casefold() not in existing_entries:
+                dll_dirs.append(dll_dir_text)
+
+    if not dll_dirs:
+        return
+
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join(dll_dirs + [existing_path])
+    env[CUDA_DLL_PATH_BOOTSTRAP_ENV] = "1"
+    result = subprocess.run([sys.executable, *sys.argv], env=env)
+    raise SystemExit(result.returncode)
+
+
+ensure_cuda_dll_paths()
 
 
 def find_on_path(name: str) -> list[str]:
