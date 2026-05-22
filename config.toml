@@ -1,0 +1,42 @@
+# VidVerba launch-time runtime config.
+# Edit before launch or use the gear panel in the app.
+
+[desktop]
+workspace_path = '\\?\D:\Media'
+
+[desktop.dependency_paths]
+
+[desktop.transcription]
+model = "large-v3"
+device = "cuda"
+compute_type = "auto"
+beam_size = 5
+vad_filter = true
+vad_min_silence_ms = 500
+word_timestamps = true
+condition_on_previous_text = false
+hallucination_silence_threshold = 1.0
+silence_threshold_db = -39.0
+
+[desktop.export]
+video_codec = "libx264"
+audio_codec = "aac"
+edit_friendly = true
+
+[plan.padding]
+lead_in = 0.5
+lead_out = 0.8
+
+[plan.silence]
+enabled = false
+threshold_db = -37.0
+min_silence_seconds = 0.6
+min_clip_seconds = 0.3
+front_padding_seconds = 0.1
+
+[plan.export]
+output_file = ""
+video_codec = "libx264"
+audio_codec = "aac"
+edit_friendly = true
+format = "mp4"

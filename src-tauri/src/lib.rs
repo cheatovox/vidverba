@@ -16,6 +16,11 @@ const TRANSCRIPTION_MODELS: &[&str] = &["tiny", "base", "small", "medium", "larg
 const DEFAULT_VAD_MIN_SILENCE_MS: u32 = 500;
 const DEFAULT_HALLUCINATION_SILENCE_THRESHOLD: f64 = 1.0;
 const DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB: f64 = -39.0;
+const RUNTIME_CONFIG_FILE_NAME: &str = "config.toml";
+const RUNTIME_CONFIG_ENV: &str = "VIDVERBA_CONFIG";
+const DEFAULT_LEAD_IN_SECONDS: f64 = 0.5;
+const DEFAULT_LEAD_OUT_SECONDS: f64 = 0.8;
+const DEFAULT_EXPORT_FORMAT: &str = "mp4";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +145,129 @@ struct DesktopSettings {
     export: ExportDefaults,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RuntimeConfig {
+    #[serde(default)]
+    desktop: DesktopSettingsOverrides,
+    #[serde(default)]
+    plan: PlanSettingsOverrides,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct DesktopSettingsOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_path: Option<String>,
+    #[serde(default)]
+    dependency_paths: DependencyPathOverrides,
+    #[serde(default)]
+    transcription: TranscriptionDefaultsOverrides,
+    #[serde(default)]
+    export: ExportDefaultsOverrides,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct DependencyPathOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ffmpeg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ffprobe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    python: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TranscriptionDefaultsOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compute_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    beam_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vad_filter: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vad_min_silence_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    word_timestamps: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    condition_on_previous_text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hallucination_silence_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    silence_threshold_db: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ExportDefaultsOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    video_codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio_codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    edit_friendly: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PlanSettingsOverrides {
+    #[serde(default)]
+    padding: PaddingSettingsOverrides,
+    #[serde(default)]
+    silence: SilenceSettingsOverrides,
+    #[serde(default)]
+    export: PlanExportSettingsOverrides,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PaddingSettingsOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lead_in: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lead_out: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SilenceSettingsOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    threshold_db: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_silence_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_clip_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    front_padding_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PlanExportSettingsOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    video_codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio_codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    edit_friendly: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeState {
+    settings: DesktopSettings,
+    config_path: Option<PathBuf>,
+    plan_defaults: PlanSettings,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DependencyStatus {
@@ -170,8 +298,17 @@ struct AppConfig {
     render_root: Option<String>,
     projects_root: Option<String>,
     settings_path: Option<String>,
+    runtime_config_path: Option<String>,
+    plan_defaults: PlanSettings,
     settings: DesktopSettings,
     dependencies: DependencyReport,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeConfigSaveRequest {
+    desktop: DesktopSettings,
+    plan: PlanSettings,
 }
 
 #[derive(Debug, Serialize)]
@@ -358,13 +495,22 @@ struct TranscriptResponse {
     segments: Vec<TranscriptSegment>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PaddingSettings {
-    #[serde(default)]
+    #[serde(default = "default_lead_in", alias = "lead_in")]
     lead_in: f64,
-    #[serde(default)]
+    #[serde(default = "default_lead_out", alias = "lead_out")]
     lead_out: f64,
+}
+
+impl Default for PaddingSettings {
+    fn default() -> Self {
+        Self {
+            lead_in: default_lead_in(),
+            lead_out: default_lead_out(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,13 +518,13 @@ struct PaddingSettings {
 struct SilenceSettings {
     #[serde(default)]
     enabled: bool,
-    #[serde(default = "default_threshold_db")]
+    #[serde(default = "default_threshold_db", alias = "threshold_db")]
     threshold_db: f64,
-    #[serde(default = "default_min_silence")]
+    #[serde(default = "default_min_silence", alias = "min_silence_seconds")]
     min_silence_seconds: f64,
-    #[serde(default = "default_min_clip")]
+    #[serde(default = "default_min_clip", alias = "min_clip_seconds")]
     min_clip_seconds: f64,
-    #[serde(default = "default_front_padding")]
+    #[serde(default = "default_front_padding", alias = "front_padding_seconds")]
     front_padding_seconds: f64,
 }
 
@@ -394,21 +540,34 @@ impl Default for SilenceSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportSettings {
-    #[serde(default)]
+    #[serde(default, alias = "output_file")]
     output_file: String,
-    #[serde(default = "default_video_codec")]
+    #[serde(default = "default_video_codec", alias = "video_codec")]
     video_codec: String,
-    #[serde(default = "default_audio_codec")]
+    #[serde(default = "default_audio_codec", alias = "audio_codec")]
     audio_codec: String,
-    #[serde(default)]
+    #[serde(default = "default_true", alias = "edit_friendly")]
     edit_friendly: bool,
-    #[serde(default)]
+    #[serde(default, alias = "frame_rate")]
     frame_rate: Option<f64>,
-    #[serde(default)]
+    #[serde(default = "default_export_format")]
     format: String,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            output_file: String::new(),
+            video_codec: default_video_codec(),
+            audio_codec: default_audio_codec(),
+            edit_friendly: true,
+            frame_rate: None,
+            format: default_export_format(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -529,6 +688,14 @@ fn default_threshold_db() -> f64 {
     -39.0
 }
 
+fn default_lead_in() -> f64 {
+    DEFAULT_LEAD_IN_SECONDS
+}
+
+fn default_lead_out() -> f64 {
+    DEFAULT_LEAD_OUT_SECONDS
+}
+
 fn default_min_silence() -> f64 {
     0.6
 }
@@ -547,6 +714,10 @@ fn default_video_codec() -> String {
 
 fn default_audio_codec() -> String {
     "aac".to_string()
+}
+
+fn default_export_format() -> String {
+    DEFAULT_EXPORT_FORMAT.to_string()
 }
 
 fn app_config_dir() -> Result<PathBuf, String> {
@@ -615,13 +786,333 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     fs::write(path, body).map_err(|error| format!("Could not write {}: {error}", path.display()))
 }
 
-fn load_settings() -> DesktopSettings {
+fn push_unique_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    let normalized = path_to_string(&canonical_or_absolute(&path));
+    let key = if cfg!(windows) {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    };
+    if !candidates.iter().any(|candidate| {
+        let candidate_key = path_to_string(&canonical_or_absolute(candidate));
+        if cfg!(windows) {
+            candidate_key.to_lowercase() == key
+        } else {
+            candidate_key == key
+        }
+    }) {
+        candidates.push(path);
+    }
+}
+
+fn runtime_config_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir() {
+        push_unique_candidate(&mut candidates, current_dir.join(RUNTIME_CONFIG_FILE_NAME));
+        if current_dir
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new("src-tauri"))
+        {
+            if let Some(parent) = current_dir.parent() {
+                push_unique_candidate(&mut candidates, parent.join(RUNTIME_CONFIG_FILE_NAME));
+            }
+        }
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            push_unique_candidate(&mut candidates, parent.join(RUNTIME_CONFIG_FILE_NAME));
+        }
+    }
+    if let Ok(config_dir) = app_config_dir() {
+        push_unique_candidate(&mut candidates, config_dir.join(RUNTIME_CONFIG_FILE_NAME));
+    }
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        push_unique_candidate(&mut candidates, manifest_dir.join(RUNTIME_CONFIG_FILE_NAME));
+        if let Some(parent) = manifest_dir.parent() {
+            push_unique_candidate(&mut candidates, parent.join(RUNTIME_CONFIG_FILE_NAME));
+        }
+    }
+    candidates
+}
+
+fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+    toml::from_str(&body)
+        .map_err(|error| format!("Could not parse runtime config {}: {error}", path.display()))
+}
+
+fn load_runtime_config() -> Result<(RuntimeConfig, Option<PathBuf>), String> {
+    if let Ok(config_path) = std::env::var(RUNTIME_CONFIG_ENV) {
+        let config_path = config_path.trim();
+        if !config_path.is_empty() {
+            let path = canonical_or_absolute(config_path);
+            if !path.is_file() {
+                return Err(format!(
+                    "{RUNTIME_CONFIG_ENV} points to {}, but that file was not found.",
+                    path.display()
+                ));
+            }
+            return read_runtime_config(&path).map(|config| (config, Some(path)));
+        }
+    }
+
+    for candidate in runtime_config_candidates() {
+        let path = canonical_or_absolute(&candidate);
+        if path.is_file() {
+            return read_runtime_config(&path).map(|config| (config, Some(path)));
+        }
+    }
+    Ok((RuntimeConfig::default(), None))
+}
+
+fn default_runtime_config_path() -> PathBuf {
+    runtime_config_candidates()
+        .into_iter()
+        .next()
+        .map(canonical_or_absolute)
+        .unwrap_or_else(|| canonical_or_absolute(RUNTIME_CONFIG_FILE_NAME))
+}
+
+fn clean_optional_string(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn apply_optional_string(target: &mut Option<String>, value: &Option<String>) {
+    if value.is_some() {
+        *target = clean_optional_string(value);
+    }
+}
+
+fn apply_string(target: &mut String, value: &Option<String>) {
+    if let Some(cleaned) = clean_optional_string(value) {
+        *target = cleaned;
+    } else if value.is_some() {
+        target.clear();
+    }
+}
+
+fn apply_desktop_overrides(settings: &mut DesktopSettings, overrides: &DesktopSettingsOverrides) {
+    apply_optional_string(&mut settings.workspace_path, &overrides.workspace_path);
+    apply_optional_string(
+        &mut settings.dependency_paths.ffmpeg,
+        &overrides.dependency_paths.ffmpeg,
+    );
+    apply_optional_string(
+        &mut settings.dependency_paths.ffprobe,
+        &overrides.dependency_paths.ffprobe,
+    );
+    apply_optional_string(
+        &mut settings.dependency_paths.python,
+        &overrides.dependency_paths.python,
+    );
+
+    apply_string(
+        &mut settings.transcription.model,
+        &overrides.transcription.model,
+    );
+    apply_optional_string(
+        &mut settings.transcription.language,
+        &overrides.transcription.language,
+    );
+    apply_string(
+        &mut settings.transcription.device,
+        &overrides.transcription.device,
+    );
+    apply_string(
+        &mut settings.transcription.compute_type,
+        &overrides.transcription.compute_type,
+    );
+    if let Some(beam_size) = overrides.transcription.beam_size {
+        settings.transcription.beam_size = beam_size;
+    }
+    if let Some(vad_filter) = overrides.transcription.vad_filter {
+        settings.transcription.vad_filter = vad_filter;
+    }
+    if let Some(vad_min_silence_ms) = overrides.transcription.vad_min_silence_ms {
+        settings.transcription.vad_min_silence_ms = vad_min_silence_ms;
+    }
+    if let Some(word_timestamps) = overrides.transcription.word_timestamps {
+        settings.transcription.word_timestamps = word_timestamps;
+    }
+    if let Some(condition_on_previous_text) = overrides.transcription.condition_on_previous_text {
+        settings.transcription.condition_on_previous_text = condition_on_previous_text;
+    }
+    if let Some(hallucination_silence_threshold) =
+        overrides.transcription.hallucination_silence_threshold
+    {
+        settings.transcription.hallucination_silence_threshold = hallucination_silence_threshold;
+    }
+    if let Some(silence_threshold_db) = overrides.transcription.silence_threshold_db {
+        settings.transcription.silence_threshold_db = silence_threshold_db;
+    }
+
+    apply_string(
+        &mut settings.export.video_codec,
+        &overrides.export.video_codec,
+    );
+    apply_string(
+        &mut settings.export.audio_codec,
+        &overrides.export.audio_codec,
+    );
+    if let Some(edit_friendly) = overrides.export.edit_friendly {
+        settings.export.edit_friendly = edit_friendly;
+    }
+    if let Some(frame_rate) = overrides.export.frame_rate {
+        settings.export.frame_rate = (frame_rate > 0.0).then_some(frame_rate);
+    }
+}
+
+fn default_plan_settings(settings: &DesktopSettings) -> PlanSettings {
+    PlanSettings {
+        padding: PaddingSettings::default(),
+        silence: SilenceSettings::default(),
+        export: ExportSettings {
+            output_file: String::new(),
+            video_codec: settings.export.video_codec.clone(),
+            audio_codec: settings.export.audio_codec.clone(),
+            edit_friendly: settings.export.edit_friendly,
+            frame_rate: settings.export.frame_rate,
+            format: default_export_format(),
+        },
+    }
+}
+
+fn apply_plan_overrides(settings: &mut PlanSettings, overrides: &PlanSettingsOverrides) {
+    if let Some(lead_in) = overrides.padding.lead_in {
+        settings.padding.lead_in = lead_in;
+    }
+    if let Some(lead_out) = overrides.padding.lead_out {
+        settings.padding.lead_out = lead_out;
+    }
+
+    if let Some(enabled) = overrides.silence.enabled {
+        settings.silence.enabled = enabled;
+    }
+    if let Some(threshold_db) = overrides.silence.threshold_db {
+        settings.silence.threshold_db = threshold_db;
+    }
+    if let Some(min_silence_seconds) = overrides.silence.min_silence_seconds {
+        settings.silence.min_silence_seconds = min_silence_seconds;
+    }
+    if let Some(min_clip_seconds) = overrides.silence.min_clip_seconds {
+        settings.silence.min_clip_seconds = min_clip_seconds;
+    }
+    if let Some(front_padding_seconds) = overrides.silence.front_padding_seconds {
+        settings.silence.front_padding_seconds = front_padding_seconds;
+    }
+
+    apply_string(
+        &mut settings.export.output_file,
+        &overrides.export.output_file,
+    );
+    apply_string(
+        &mut settings.export.video_codec,
+        &overrides.export.video_codec,
+    );
+    apply_string(
+        &mut settings.export.audio_codec,
+        &overrides.export.audio_codec,
+    );
+    if let Some(edit_friendly) = overrides.export.edit_friendly {
+        settings.export.edit_friendly = edit_friendly;
+    }
+    if let Some(frame_rate) = overrides.export.frame_rate {
+        settings.export.frame_rate = (frame_rate > 0.0).then_some(frame_rate);
+    }
+    apply_string(&mut settings.export.format, &overrides.export.format);
+}
+
+fn runtime_config_from_settings(settings: &DesktopSettings, plan: &PlanSettings) -> RuntimeConfig {
+    RuntimeConfig {
+        desktop: DesktopSettingsOverrides {
+            workspace_path: settings.workspace_path.clone(),
+            dependency_paths: DependencyPathOverrides {
+                ffmpeg: settings.dependency_paths.ffmpeg.clone(),
+                ffprobe: settings.dependency_paths.ffprobe.clone(),
+                python: settings.dependency_paths.python.clone(),
+            },
+            transcription: TranscriptionDefaultsOverrides {
+                model: Some(settings.transcription.model.clone()),
+                language: settings.transcription.language.clone(),
+                device: Some(settings.transcription.device.clone()),
+                compute_type: Some(settings.transcription.compute_type.clone()),
+                beam_size: Some(settings.transcription.beam_size),
+                vad_filter: Some(settings.transcription.vad_filter),
+                vad_min_silence_ms: Some(settings.transcription.vad_min_silence_ms),
+                word_timestamps: Some(settings.transcription.word_timestamps),
+                condition_on_previous_text: Some(settings.transcription.condition_on_previous_text),
+                hallucination_silence_threshold: Some(
+                    settings.transcription.hallucination_silence_threshold,
+                ),
+                silence_threshold_db: Some(settings.transcription.silence_threshold_db),
+            },
+            export: ExportDefaultsOverrides {
+                video_codec: Some(settings.export.video_codec.clone()),
+                audio_codec: Some(settings.export.audio_codec.clone()),
+                edit_friendly: Some(settings.export.edit_friendly),
+                frame_rate: settings.export.frame_rate,
+            },
+        },
+        plan: PlanSettingsOverrides {
+            padding: PaddingSettingsOverrides {
+                lead_in: Some(plan.padding.lead_in),
+                lead_out: Some(plan.padding.lead_out),
+            },
+            silence: SilenceSettingsOverrides {
+                enabled: Some(plan.silence.enabled),
+                threshold_db: Some(plan.silence.threshold_db),
+                min_silence_seconds: Some(plan.silence.min_silence_seconds),
+                min_clip_seconds: Some(plan.silence.min_clip_seconds),
+                front_padding_seconds: Some(plan.silence.front_padding_seconds),
+            },
+            export: PlanExportSettingsOverrides {
+                output_file: Some(plan.export.output_file.clone()),
+                video_codec: Some(plan.export.video_codec.clone()),
+                audio_codec: Some(plan.export.audio_codec.clone()),
+                edit_friendly: Some(plan.export.edit_friendly),
+                frame_rate: plan.export.frame_rate,
+                format: Some(plan.export.format.clone()),
+            },
+        },
+    }
+}
+
+fn write_runtime_config(path: &Path, config: &RuntimeConfig) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+    }
+    let body = toml::to_string_pretty(config)
+        .map_err(|error| format!("Could not serialize runtime config: {error}"))?;
+    let header = [
+        "# VidVerba launch-time runtime config.",
+        "# Edit before launch or use the gear panel in the app.",
+        "",
+        "",
+    ]
+    .join("\n");
+    fs::write(path, format!("{header}{body}"))
+        .map_err(|error| format!("Could not write {}: {error}", path.display()))
+}
+
+fn load_saved_settings(runtime_config: &RuntimeConfig) -> DesktopSettings {
     let mut settings = bootstrap_path()
         .ok()
         .as_deref()
         .and_then(read_json::<DesktopSettings>)
         .unwrap_or_default();
 
+    apply_optional_string(
+        &mut settings.workspace_path,
+        &runtime_config.desktop.workspace_path,
+    );
     if let Some(workspace) = settings.workspace_path.clone() {
         let workspace_path = PathBuf::from(workspace);
         if let Some(workspace_settings) =
@@ -631,11 +1122,36 @@ fn load_settings() -> DesktopSettings {
         }
     }
 
+    apply_desktop_overrides(&mut settings, &runtime_config.desktop);
     normalize_settings(&mut settings);
     settings
 }
 
+fn load_runtime_state() -> Result<RuntimeState, String> {
+    let (runtime_config, config_path) = load_runtime_config()?;
+    let settings = load_saved_settings(&runtime_config);
+    let mut plan_defaults = default_plan_settings(&settings);
+    apply_plan_overrides(&mut plan_defaults, &runtime_config.plan);
+    normalize_plan_settings(&mut plan_defaults);
+    Ok(RuntimeState {
+        settings,
+        config_path,
+        plan_defaults,
+    })
+}
+
+fn load_settings() -> Result<DesktopSettings, String> {
+    Ok(load_runtime_state()?.settings)
+}
+
 fn normalize_settings(settings: &mut DesktopSettings) {
+    settings.workspace_path = settings
+        .workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|workspace| !workspace.is_empty())
+        .map(canonical_or_absolute)
+        .map(|path| path_to_string(&path));
     settings.transcription.model = normalize_transcription_model(&settings.transcription.model);
     if settings.transcription.device.trim().is_empty() {
         settings.transcription.device = default_transcription_device();
@@ -655,6 +1171,47 @@ fn normalize_settings(settings: &mut DesktopSettings) {
     }
     if settings.transcription.silence_threshold_db == 0.0 {
         settings.transcription.silence_threshold_db = DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB;
+    }
+    if settings.export.video_codec.trim().is_empty() {
+        settings.export.video_codec = default_video_codec();
+    }
+    if settings.export.audio_codec.trim().is_empty() {
+        settings.export.audio_codec = default_audio_codec();
+    }
+    if settings
+        .export
+        .frame_rate
+        .is_some_and(|frame_rate| frame_rate <= 0.0)
+    {
+        settings.export.frame_rate = None;
+    }
+}
+
+fn normalize_plan_settings(settings: &mut PlanSettings) {
+    settings.padding.lead_in = settings.padding.lead_in.max(0.0);
+    settings.padding.lead_out = settings.padding.lead_out.max(0.0);
+    if settings.silence.min_silence_seconds <= 0.0 {
+        settings.silence.min_silence_seconds = default_min_silence();
+    }
+    if settings.silence.min_clip_seconds <= 0.0 {
+        settings.silence.min_clip_seconds = default_min_clip();
+    }
+    settings.silence.front_padding_seconds = settings.silence.front_padding_seconds.max(0.0);
+    if settings.export.video_codec.trim().is_empty() {
+        settings.export.video_codec = default_video_codec();
+    }
+    if settings.export.audio_codec.trim().is_empty() {
+        settings.export.audio_codec = default_audio_codec();
+    }
+    if settings.export.format.trim().is_empty() {
+        settings.export.format = default_export_format();
+    }
+    if settings
+        .export
+        .frame_rate
+        .is_some_and(|frame_rate| frame_rate <= 0.0)
+    {
+        settings.export.frame_rate = None;
     }
 }
 
@@ -850,7 +1407,8 @@ fn executable_or_error(status: &DependencyStatus) -> Result<PathBuf, String> {
         .ok_or_else(|| status.message.clone())
 }
 
-fn config_from_settings(settings: DesktopSettings) -> AppConfig {
+fn config_from_runtime_state(state: RuntimeState) -> AppConfig {
+    let settings = state.settings;
     let workspace = settings.workspace_path.as_ref().map(PathBuf::from);
     let default_input_dir = workspace.clone().unwrap_or_else(home_or_current_dir);
     let dependencies = dependency_report(&settings);
@@ -869,6 +1427,8 @@ fn config_from_settings(settings: DesktopSettings) -> AppConfig {
         settings_path: workspace
             .as_ref()
             .map(|path| path_to_string(&workspace_settings_path(path))),
+        runtime_config_path: state.config_path.as_deref().map(path_to_string),
+        plan_defaults: state.plan_defaults,
         settings,
         dependencies,
     }
@@ -876,16 +1436,16 @@ fn config_from_settings(settings: DesktopSettings) -> AppConfig {
 
 #[tauri::command]
 fn get_config() -> Result<AppConfig, String> {
-    let settings = load_settings();
-    if let Some(workspace) = settings.workspace_path.as_ref() {
+    let state = load_runtime_state()?;
+    if let Some(workspace) = state.settings.workspace_path.as_ref() {
         ensure_workspace_dirs(&PathBuf::from(workspace))?;
     }
-    Ok(config_from_settings(settings))
+    Ok(config_from_runtime_state(state))
 }
 
 #[tauri::command]
-fn check_dependencies() -> DependencyReport {
-    dependency_report(&load_settings())
+fn check_dependencies() -> Result<DependencyReport, String> {
+    Ok(dependency_report(&load_settings()?))
 }
 
 #[tauri::command]
@@ -898,25 +1458,47 @@ fn set_workspace(path: String) -> Result<AppConfig, String> {
         )
     })?;
     ensure_workspace_dirs(&workspace)?;
-    let mut settings = load_settings();
-    settings.workspace_path = Some(path_to_string(&workspace));
-    save_all_settings(&settings)?;
-    Ok(config_from_settings(settings))
+    let mut state = load_runtime_state()?;
+    state.settings.workspace_path = Some(path_to_string(&workspace));
+    save_all_settings(&state.settings)?;
+    Ok(config_from_runtime_state(state))
 }
 
 #[tauri::command]
 fn save_settings(mut settings: DesktopSettings) -> Result<AppConfig, String> {
+    let state = load_runtime_state()?;
     normalize_settings(&mut settings);
     if let Some(workspace) = &settings.workspace_path {
         ensure_workspace_dirs(&PathBuf::from(workspace))?;
     }
     save_all_settings(&settings)?;
-    Ok(config_from_settings(settings))
+    Ok(config_from_runtime_state(RuntimeState {
+        settings,
+        config_path: state.config_path,
+        plan_defaults: state.plan_defaults,
+    }))
+}
+
+#[tauri::command]
+fn save_runtime_config(mut request: RuntimeConfigSaveRequest) -> Result<AppConfig, String> {
+    normalize_settings(&mut request.desktop);
+    normalize_plan_settings(&mut request.plan);
+    let path = load_runtime_config()?
+        .1
+        .unwrap_or_else(default_runtime_config_path);
+    let runtime_config = runtime_config_from_settings(&request.desktop, &request.plan);
+    write_runtime_config(&path, &runtime_config)?;
+    let mut state = load_runtime_state()?;
+    state.config_path = Some(path);
+    if let Some(workspace) = state.settings.workspace_path.as_ref() {
+        ensure_workspace_dirs(&PathBuf::from(workspace))?;
+    }
+    Ok(config_from_runtime_state(state))
 }
 
 #[tauri::command]
 fn browse_directory(requested_dir: Option<String>) -> Result<BrowseResult, String> {
-    let settings = load_settings();
+    let settings = load_settings()?;
     let fallback = settings
         .workspace_path
         .as_ref()
@@ -1004,7 +1586,7 @@ fn browse_directory(requested_dir: Option<String>) -> Result<BrowseResult, Strin
 
 #[tauri::command]
 fn probe_videos(paths: Vec<String>) -> Result<ProbeResponse, String> {
-    let deps = dependency_report(&load_settings());
+    let deps = dependency_report(&load_settings()?);
     let ffprobe = executable_or_error(&deps.ffprobe)?;
     let mut videos = Vec::new();
     for input_path in paths {
@@ -1015,7 +1597,7 @@ fn probe_videos(paths: Vec<String>) -> Result<ProbeResponse, String> {
 
 #[tauri::command]
 fn load_or_run_transcript(request: TranscriptRequest) -> Result<TranscriptResponse, String> {
-    let settings = load_settings();
+    let settings = load_settings()?;
     let workspace = workspace_path(&settings)?;
     ensure_workspace_dirs(&workspace)?;
     let source_path = canonical_or_absolute(&request.source_path);
@@ -1146,8 +1728,9 @@ fn load_or_run_transcript(request: TranscriptRequest) -> Result<TranscriptRespon
 }
 
 #[tauri::command]
-fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
-    let settings = load_settings();
+fn analyze_plan(mut request: AnalyzeRequest) -> Result<AnalysisReport, String> {
+    let settings = load_settings()?;
+    normalize_plan_settings(&mut request.settings);
     let workspace = workspace_path(&settings)?;
     ensure_workspace_dirs(&workspace)?;
     let deps = dependency_report(&settings);
@@ -1414,7 +1997,7 @@ fn analyze_plan(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
 
 #[tauri::command]
 fn render_report(request: RenderRequest) -> Result<RenderResult, String> {
-    let settings = load_settings();
+    let settings = load_settings()?;
     let workspace = workspace_path(&settings)?;
     ensure_workspace_dirs(&workspace)?;
     let deps = dependency_report(&settings);
@@ -2300,6 +2883,7 @@ pub fn run() {
             check_dependencies,
             get_config,
             set_workspace,
+            save_runtime_config,
             browse_directory,
             probe_videos,
             load_or_run_transcript,

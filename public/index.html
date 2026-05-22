@@ -11,13 +11,122 @@
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">V</div>
-          <div>
+          <div class="brand-copy">
             <h1>VidVerba</h1>
             <p id="plan-state">draft</p>
           </div>
+          <button id="settings-button" class="gear-button" type="button" title="Settings" aria-label="Settings" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Z"></path>
+              <path d="M19.4 13.5c.1-.5.1-1 .1-1.5s0-1-.1-1.5l2-1.5-2-3.5-2.4 1a8.2 8.2 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A8.2 8.2 0 0 0 7 6.5l-2.4-1-2 3.5 2 1.5A9 9 0 0 0 4.5 12c0 .5 0 1 .1 1.5l-2 1.5 2 3.5 2.4-1a8.2 8.2 0 0 0 2.6 1.5L10 21.5h4l.4-2.5a8.2 8.2 0 0 0 2.6-1.5l2.4 1 2-3.5-2-1.5Z"></path>
+            </svg>
+          </button>
         </div>
         <nav id="steps" class="steps"></nav>
       </aside>
+
+      <div id="settings-scrim" class="settings-scrim hidden"></div>
+      <section id="settings-panel" class="settings-panel hidden" aria-labelledby="settings-title">
+        <div class="settings-panel-header">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2 id="settings-title">VidVerba</h2>
+          </div>
+          <button id="settings-close" class="icon-button secondary" type="button" title="Close" aria-label="Close settings">×</button>
+        </div>
+
+        <div class="settings-panel-content">
+          <section class="settings-section">
+            <h3>About</h3>
+            <p class="status-line">VidVerba is a local desktop app for turning recorded video into reviewed, transcript-selected clips. It keeps source metadata, transcripts, silence analysis, and rendering under your workspace.</p>
+          </section>
+
+          <section class="settings-section">
+            <div class="settings-section-heading">
+              <h3>TOML Defaults</h3>
+              <p id="settings-config-path" class="status-line">No config loaded.</p>
+            </div>
+            <div class="settings-form-grid two">
+              <label>Lead in <input id="settings-lead-in" type="number" min="0" step="0.1"></label>
+              <label>Lead out <input id="settings-lead-out" type="number" min="0" step="0.1"></label>
+            </div>
+            <label class="toggle"><input id="settings-silence-enabled" type="checkbox"> Silence Trim enabled</label>
+            <div class="settings-form-grid two">
+              <label>Threshold dB <input id="settings-threshold-db" type="number" step="1"></label>
+              <label>Min silence <input id="settings-min-silence" type="number" min="0" step="0.1"></label>
+              <label>Min clip <input id="settings-min-clip" type="number" min="0" step="0.1"></label>
+              <label>Front pad <input id="settings-front-padding" type="number" min="0" step="0.1"></label>
+            </div>
+            <div class="settings-form-grid two">
+              <label>Video codec
+                <select id="settings-video-codec">
+                  <option value="libx264">H.264 software</option>
+                  <option value="h264_nvenc">H.264 NVENC</option>
+                  <option value="av1_nvenc">AV1 NVENC</option>
+                </select>
+              </label>
+              <label>Frame rate <input id="settings-frame-rate" type="number" min="1" step="0.001" placeholder="source"></label>
+            </div>
+            <label class="toggle"><input id="settings-edit-friendly" type="checkbox"> Edit-friendly CFR MP4</label>
+            <label>Output file <input id="settings-output-file" placeholder="auto"></label>
+          </section>
+
+          <section class="settings-section">
+            <h3>Transcription Defaults</h3>
+            <div class="settings-form-grid two">
+              <label>Model
+                <select id="settings-model-input">
+                  <option value="tiny">Tiny (tiny)</option>
+                  <option value="base">Base (base)</option>
+                  <option value="small">Fast Draft (small)</option>
+                  <option value="medium">Balanced (medium)</option>
+                  <option value="large-v3">Best Accuracy (large-v3)</option>
+                </select>
+              </label>
+              <label>Language <input id="settings-language-input" placeholder="auto"></label>
+              <label>Device
+                <select id="settings-device-input">
+                  <option value="auto">auto</option>
+                  <option value="cuda">cuda</option>
+                  <option value="cpu">cpu</option>
+                </select>
+              </label>
+              <label>Compute <input id="settings-compute-type" placeholder="auto"></label>
+              <label>Beam size <input id="settings-beam-size" type="number" min="1" step="1"></label>
+              <label>VAD silence ms <input id="settings-vad-min-silence-ms" type="number" min="1" step="1"></label>
+              <label>Hallucination silence <input id="settings-hallucination-threshold" type="number" min="0" step="0.1"></label>
+              <label>Transcript silence dB <input id="settings-transcript-silence-db" type="number" step="1"></label>
+            </div>
+            <label class="toggle"><input id="settings-vad-filter" type="checkbox"> VAD filter</label>
+            <label class="toggle"><input id="settings-word-timestamps" type="checkbox"> Word timestamps</label>
+            <label class="toggle"><input id="settings-condition-previous" type="checkbox"> Condition on previous text</label>
+          </section>
+
+          <section class="settings-section">
+            <div class="settings-section-heading">
+              <h3>Desktop Runtime</h3>
+              <button id="choose-workspace" class="secondary" type="button">Choose Workspace</button>
+            </div>
+            <label>Workspace <input id="settings-workspace-path" placeholder="Choose a workspace folder"></label>
+            <div class="settings-form-grid">
+              <label>ffmpeg <input id="settings-ffmpeg-path" placeholder="auto-detect from PATH"></label>
+              <label>ffprobe <input id="settings-ffprobe-path" placeholder="auto-detect from PATH"></label>
+              <label>Python <input id="settings-python-path" placeholder="auto-detect from PATH"></label>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h3>Runtime Status</h3>
+            <div id="settings-dependency-list" class="settings-dependency-list"></div>
+            <p class="status-line runtime-note">CUDA acceleration is optional. Auto/CUDA uses NVIDIA support when available and records CPU fallback if needed.</p>
+          </section>
+
+          <div class="settings-actions">
+            <p id="settings-save-status" class="status-line"></p>
+            <button id="save-runtime-config" type="button">Save Config</button>
+          </div>
+        </div>
+      </section>
 
       <main class="workspace">
         <header class="topbar">
@@ -34,27 +143,6 @@
         <section id="notice" class="notice hidden"></section>
 
         <section id="view-source" class="view active">
-          <div class="panel desktop-panel">
-            <div class="toolbar split">
-              <div>
-                <h3>Desktop Workspace</h3>
-                <p id="workspace-status" class="status-line">Loading desktop configuration.</p>
-              </div>
-              <div class="button-group">
-                <button id="choose-workspace" class="secondary" type="button">Choose Workspace</button>
-                <button id="save-dependencies" type="button">Save Settings</button>
-              </div>
-            </div>
-            <div class="desktop-settings-grid">
-              <label>Workspace <input id="workspace-path" placeholder="Choose a workspace folder"></label>
-              <label>ffmpeg <input id="ffmpeg-path" placeholder="auto-detect from PATH"></label>
-              <label>ffprobe <input id="ffprobe-path" placeholder="auto-detect from PATH"></label>
-              <label>Python <input id="python-path" placeholder="auto-detect from PATH"></label>
-            </div>
-            <div id="dependency-grid" class="dependency-grid"></div>
-            <p class="status-line runtime-note">CUDA acceleration is optional and user-managed. VidVerba can use NVIDIA runtime support when it is available to Python; otherwise transcription runs on CPU.</p>
-          </div>
-
           <div class="two-column">
             <div class="panel browser-panel">
               <div class="path-row">
@@ -99,7 +187,6 @@
                   <option value="cpu">cpu</option>
                 </select>
               </div>
-              <p class="status-line runtime-note">CUDA is optional for speed. Auto/CUDA tries NVIDIA runtime support first and records a CPU fallback when CUDA is unavailable.</p>
               <button id="load-transcript" type="button">Load Transcript</button>
               <button id="force-transcript" class="secondary" type="button">Run Fresh</button>
             </div>

@@ -11,6 +11,19 @@ There is no supported web app, website preview, browser fallback, HTTP API, loca
 - Check frontend syntax with `npm run check`.
 - Check the desktop/Tauri environment with `npm run check:desktop`.
 
+## Launch-Time Config
+
+VidVerba reads a human-editable TOML file before the desktop UI initializes. The repo includes `config.toml`; edit it before launch, or use the sidebar gear panel in the app, to change defaults such as range padding or whether Silence Trim starts enabled.
+
+Config lookup order:
+
+1. `VIDVERBA_CONFIG`, when set to a TOML file path.
+2. `config.toml` in the current working directory.
+3. `config.toml` next to the desktop executable.
+4. The OS app config directory, such as `%APPDATA%\VidVerba\config.toml` on Windows.
+
+Values present in `config.toml` act as runtime overrides. Omitted or commented values fall back to saved in-app JSON settings or built-in defaults.
+
 ## Transcription Runtime
 
 VidVerba shells out to the user's configured Python runtime for transcription. Public builds should treat these as user-managed dependencies:

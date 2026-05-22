@@ -13,6 +13,27 @@ const TRANSCRIPTION_MODELS = ["tiny", "base", "small", "medium", "large-v3"];
 const DEFAULT_VAD_MIN_SILENCE_MS = 500;
 const DEFAULT_HALLUCINATION_SILENCE_THRESHOLD = 1.0;
 const DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB = -39;
+const DEFAULT_PLAN_DEFAULTS = {
+  padding: {
+    leadIn: 0.5,
+    leadOut: 0.8,
+  },
+  silence: {
+    enabled: false,
+    thresholdDb: -39,
+    minSilenceSeconds: 0.6,
+    minClipSeconds: 0.3,
+    frontPaddingSeconds: 0.1,
+  },
+  export: {
+    outputFile: "",
+    videoCodec: "libx264",
+    audioCodec: "aac",
+    editFriendly: true,
+    frameRate: null,
+    format: "mp4",
+  },
+};
 
 const state = {
   config: null,
@@ -43,6 +64,68 @@ const openDialog = (...args) => window.__TAURI__?.dialog?.open?.(...args);
 function normalizeTranscriptionModel(value) {
   const model = String(value || "").trim();
   return TRANSCRIPTION_MODELS.includes(model) ? model : DEFAULT_TRANSCRIPTION_MODEL;
+}
+
+function planDefaults() {
+  const configured = state.config?.planDefaults || {};
+  return {
+    padding: {
+      leadIn: configured.padding?.leadIn ?? DEFAULT_PLAN_DEFAULTS.padding.leadIn,
+      leadOut: configured.padding?.leadOut ?? DEFAULT_PLAN_DEFAULTS.padding.leadOut,
+    },
+    silence: {
+      enabled: configured.silence?.enabled ?? DEFAULT_PLAN_DEFAULTS.silence.enabled,
+      thresholdDb: configured.silence?.thresholdDb ?? DEFAULT_PLAN_DEFAULTS.silence.thresholdDb,
+      minSilenceSeconds: configured.silence?.minSilenceSeconds ?? DEFAULT_PLAN_DEFAULTS.silence.minSilenceSeconds,
+      minClipSeconds: configured.silence?.minClipSeconds ?? DEFAULT_PLAN_DEFAULTS.silence.minClipSeconds,
+      frontPaddingSeconds: configured.silence?.frontPaddingSeconds ?? DEFAULT_PLAN_DEFAULTS.silence.frontPaddingSeconds,
+    },
+    export: {
+      outputFile: configured.export?.outputFile ?? DEFAULT_PLAN_DEFAULTS.export.outputFile,
+      videoCodec: configured.export?.videoCodec ?? DEFAULT_PLAN_DEFAULTS.export.videoCodec,
+      audioCodec: configured.export?.audioCodec ?? DEFAULT_PLAN_DEFAULTS.export.audioCodec,
+      editFriendly: configured.export?.editFriendly ?? DEFAULT_PLAN_DEFAULTS.export.editFriendly,
+      frameRate: configured.export?.frameRate ?? DEFAULT_PLAN_DEFAULTS.export.frameRate,
+      format: configured.export?.format ?? DEFAULT_PLAN_DEFAULTS.export.format,
+    },
+  };
+}
+
+function optionalNumberInput(selector) {
+  const value = $(selector).value.trim();
+  if (!value) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function numberInput(selector, fallback) {
+  const value = optionalNumberInput(selector);
+  return value ?? fallback;
+}
+
+function integerInput(selector, fallback) {
+  return Math.max(0, Math.round(numberInput(selector, fallback)));
+}
+
+function applyPlanDefaults(defaults = planDefaults()) {
+  $("#lead-in").value = defaults.padding.leadIn;
+  $("#lead-out").value = defaults.padding.leadOut;
+  $("#silence-enabled").checked = defaults.silence.enabled;
+  $("#threshold-db").value = defaults.silence.thresholdDb;
+  $("#min-silence").value = defaults.silence.minSilenceSeconds;
+  $("#min-clip").value = defaults.silence.minClipSeconds;
+  $("#front-padding").value = defaults.silence.frontPaddingSeconds;
+  $("#video-codec").value = defaults.export.videoCodec;
+  $("#frame-rate").value = defaults.export.frameRate ?? "";
+  $("#edit-friendly").checked = defaults.export.editFriendly;
+  $("#output-file").value = defaults.export.outputFile || "";
+}
+
+function applyConfigToMainControls({ applyPlan = false } = {}) {
+  $("#model-input").value = normalizeTranscriptionModel(state.config?.settings?.transcription?.model);
+  $("#language-input").value = state.config?.settings?.transcription?.language || "";
+  $("#device-input").value = state.config?.settings?.transcription?.device || "auto";
+  if (applyPlan) applyPlanDefaults(planDefaults());
 }
 
 function selectedTranscriptionModel() {
@@ -160,6 +243,10 @@ function getConfig() {
   return invokeCommand("get_config");
 }
 
+function saveRuntimeConfig(request) {
+  return invokeCommand("save_runtime_config", { request });
+}
+
 function browseDirectory(requestedDir) {
   return invokeCommand("browse_directory", { requestedDir: requestedDir || null });
 }
@@ -222,28 +309,21 @@ function dependencyAvailable(name) {
   return dependencyList().find((dependency) => dependency?.name === name)?.available;
 }
 
-function renderDesktopPanel() {
-  const panel = $(".desktop-panel");
-  if (!panel) return;
-  panel.classList.toggle("hidden", !state.tauriReady);
-  if (!state.tauriReady) return;
+function compactVersion(value) {
+  return String(value || "").replace(/\s+Copyright.*$/i, "");
+}
 
-  const settings = state.config?.settings || {};
-  $("#workspace-path").value = state.config?.workspacePath || settings.workspacePath || "";
-  $("#ffmpeg-path").value = settings.dependencyPaths?.ffmpeg || "";
-  $("#ffprobe-path").value = settings.dependencyPaths?.ffprobe || "";
-  $("#python-path").value = settings.dependencyPaths?.python || "";
-  $("#workspace-status").textContent = state.config?.workspacePath
-    ? `Workspace is ${state.config.workspacePath}`
-    : "Choose a workspace folder before transcribing, analyzing, or rendering.";
-
-  $("#dependency-grid").innerHTML = dependencyList()
+function renderSettingsPanel() {
+  $("#settings-button").classList.toggle("active", isSettingsPanelOpen());
+  $("#settings-button").setAttribute("aria-expanded", String(isSettingsPanelOpen()));
+  $("#settings-config-path").textContent = state.config?.runtimeConfigPath || "config.toml";
+  $("#settings-dependency-list").innerHTML = dependencyList()
     .map(
       (dependency) => `
-        <div class="dependency ${dependency.available ? "ok" : "bad"}">
-          <strong>${escapeHtml(dependency.name)}</strong>
+        <div class="settings-dependency ${dependency.available ? "ok" : "bad"}">
+          <strong>${escapeHtml(dependency.name)} <span>${dependency.available ? "Ready" : "Needs setup"}</span></strong>
           <span>${escapeHtml(dependency.requiredFor)}</span>
-          <small>${escapeHtml(dependency.version || dependency.message || "")}</small>
+          <small>${escapeHtml(compactVersion(dependency.version) || dependency.message || "")}</small>
           ${dependency.resolvedPath ? `<small>${escapeHtml(dependency.resolvedPath)}</small>` : ""}
         </div>
       `,
@@ -251,58 +331,148 @@ function renderDesktopPanel() {
     .join("");
 }
 
-function currentDesktopSettings() {
+function isSettingsPanelOpen() {
+  return !$("#settings-panel").classList.contains("hidden");
+}
+
+function openSettingsPanel() {
+  syncSettingsPanelInputs();
+  showSettingsStatus("");
+  $("#settings-panel").classList.remove("hidden");
+  $("#settings-scrim").classList.remove("hidden");
+  renderSettingsPanel();
+}
+
+function closeSettingsPanel() {
+  $("#settings-panel").classList.add("hidden");
+  $("#settings-scrim").classList.add("hidden");
+  renderSettingsPanel();
+}
+
+function showSettingsStatus(message, isError = false) {
+  const status = $("#settings-save-status");
+  status.textContent = message || "";
+  status.classList.toggle("error-text", Boolean(isError));
+}
+
+function syncSettingsPanelInputs() {
   const existing = state.config?.settings || {};
+  const defaults = planDefaults();
+  $("#settings-workspace-path").value = state.config?.workspacePath || existing.workspacePath || "";
+  $("#settings-ffmpeg-path").value = existing.dependencyPaths?.ffmpeg || "";
+  $("#settings-ffprobe-path").value = existing.dependencyPaths?.ffprobe || "";
+  $("#settings-python-path").value = existing.dependencyPaths?.python || "";
+  $("#settings-model-input").value = normalizeTranscriptionModel(existing.transcription?.model);
+  $("#settings-language-input").value = existing.transcription?.language || "";
+  $("#settings-device-input").value = existing.transcription?.device || "auto";
+  $("#settings-compute-type").value = existing.transcription?.computeType || "auto";
+  $("#settings-beam-size").value = existing.transcription?.beamSize ?? 5;
+  $("#settings-vad-min-silence-ms").value = existing.transcription?.vadMinSilenceMs ?? DEFAULT_VAD_MIN_SILENCE_MS;
+  $("#settings-hallucination-threshold").value =
+    existing.transcription?.hallucinationSilenceThreshold ?? DEFAULT_HALLUCINATION_SILENCE_THRESHOLD;
+  $("#settings-transcript-silence-db").value =
+    existing.transcription?.silenceThresholdDb ?? DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB;
+  $("#settings-vad-filter").checked = existing.transcription?.vadFilter ?? true;
+  $("#settings-word-timestamps").checked = existing.transcription?.wordTimestamps ?? true;
+  $("#settings-condition-previous").checked = existing.transcription?.conditionOnPreviousText ?? false;
+  $("#settings-lead-in").value = defaults.padding.leadIn;
+  $("#settings-lead-out").value = defaults.padding.leadOut;
+  $("#settings-silence-enabled").checked = defaults.silence.enabled;
+  $("#settings-threshold-db").value = defaults.silence.thresholdDb;
+  $("#settings-min-silence").value = defaults.silence.minSilenceSeconds;
+  $("#settings-min-clip").value = defaults.silence.minClipSeconds;
+  $("#settings-front-padding").value = defaults.silence.frontPaddingSeconds;
+  $("#settings-video-codec").value = defaults.export.videoCodec;
+  $("#settings-frame-rate").value = defaults.export.frameRate ?? "";
+  $("#settings-edit-friendly").checked = defaults.export.editFriendly;
+  $("#settings-output-file").value = defaults.export.outputFile || "";
+}
+
+function currentRuntimeConfig() {
+  const existing = state.config?.settings || {};
+  const defaults = planDefaults();
   return {
-    workspacePath: $("#workspace-path").value.trim() || null,
-    dependencyPaths: {
-      ffmpeg: $("#ffmpeg-path").value.trim() || null,
-      ffprobe: $("#ffprobe-path").value.trim() || null,
-      python: $("#python-path").value.trim() || null,
+    desktop: {
+      workspacePath: $("#settings-workspace-path").value.trim() || null,
+      dependencyPaths: {
+        ffmpeg: $("#settings-ffmpeg-path").value.trim() || null,
+        ffprobe: $("#settings-ffprobe-path").value.trim() || null,
+        python: $("#settings-python-path").value.trim() || null,
+      },
+      transcription: {
+        model: normalizeTranscriptionModel($("#settings-model-input").value),
+        language: $("#settings-language-input").value.trim() || null,
+        device: $("#settings-device-input").value || existing.transcription?.device || "auto",
+        computeType: $("#settings-compute-type").value.trim() || existing.transcription?.computeType || "auto",
+        beamSize: integerInput("#settings-beam-size", existing.transcription?.beamSize ?? 5),
+        vadFilter: $("#settings-vad-filter").checked,
+        vadMinSilenceMs: integerInput(
+          "#settings-vad-min-silence-ms",
+          existing.transcription?.vadMinSilenceMs ?? DEFAULT_VAD_MIN_SILENCE_MS,
+        ),
+        wordTimestamps: $("#settings-word-timestamps").checked,
+        conditionOnPreviousText: $("#settings-condition-previous").checked,
+        hallucinationSilenceThreshold: numberInput(
+          "#settings-hallucination-threshold",
+          existing.transcription?.hallucinationSilenceThreshold ?? DEFAULT_HALLUCINATION_SILENCE_THRESHOLD,
+        ),
+        silenceThresholdDb: numberInput(
+          "#settings-transcript-silence-db",
+          existing.transcription?.silenceThresholdDb ?? DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB,
+        ),
+      },
+      export: {
+        videoCodec: $("#settings-video-codec").value || existing.export?.videoCodec || DEFAULT_PLAN_DEFAULTS.export.videoCodec,
+        audioCodec: existing.export?.audioCodec || DEFAULT_PLAN_DEFAULTS.export.audioCodec,
+        editFriendly: $("#settings-edit-friendly").checked,
+        frameRate: optionalNumberInput("#settings-frame-rate"),
+      },
     },
-    transcription: {
-      model: selectedTranscriptionModel(),
-      language: $("#language-input").value.trim() || null,
-      device: $("#device-input").value || existing.transcription?.device || "auto",
-      computeType: existing.transcription?.computeType || "auto",
-      beamSize: existing.transcription?.beamSize || 5,
-      vadFilter: existing.transcription?.vadFilter ?? true,
-      vadMinSilenceMs: existing.transcription?.vadMinSilenceMs || DEFAULT_VAD_MIN_SILENCE_MS,
-      wordTimestamps: existing.transcription?.wordTimestamps ?? true,
-      conditionOnPreviousText: existing.transcription?.conditionOnPreviousText ?? false,
-      hallucinationSilenceThreshold:
-        existing.transcription?.hallucinationSilenceThreshold || DEFAULT_HALLUCINATION_SILENCE_THRESHOLD,
-      silenceThresholdDb: existing.transcription?.silenceThresholdDb || DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB,
-    },
-    export: {
-      videoCodec: $("#video-codec").value || existing.export?.videoCodec || "libx264",
-      audioCodec: "aac",
-      editFriendly: $("#edit-friendly").checked,
-      frameRate: $("#frame-rate").value ? Number($("#frame-rate").value) : null,
+    plan: {
+      padding: {
+        leadIn: numberInput("#settings-lead-in", DEFAULT_PLAN_DEFAULTS.padding.leadIn),
+        leadOut: numberInput("#settings-lead-out", DEFAULT_PLAN_DEFAULTS.padding.leadOut),
+      },
+      silence: {
+        enabled: $("#settings-silence-enabled").checked,
+        thresholdDb: numberInput("#settings-threshold-db", DEFAULT_PLAN_DEFAULTS.silence.thresholdDb),
+        minSilenceSeconds: numberInput("#settings-min-silence", DEFAULT_PLAN_DEFAULTS.silence.minSilenceSeconds),
+        minClipSeconds: numberInput("#settings-min-clip", DEFAULT_PLAN_DEFAULTS.silence.minClipSeconds),
+        frontPaddingSeconds: numberInput("#settings-front-padding", DEFAULT_PLAN_DEFAULTS.silence.frontPaddingSeconds),
+      },
+      export: {
+        outputFile: $("#settings-output-file").value.trim(),
+        videoCodec: $("#settings-video-codec").value || DEFAULT_PLAN_DEFAULTS.export.videoCodec,
+        audioCodec: defaults.export.audioCodec || existing.export?.audioCodec || DEFAULT_PLAN_DEFAULTS.export.audioCodec,
+        editFriendly: $("#settings-edit-friendly").checked,
+        frameRate: optionalNumberInput("#settings-frame-rate"),
+        format: defaults.export.format || DEFAULT_PLAN_DEFAULTS.export.format,
+      },
     },
   };
 }
 
 function getSettings() {
+  const defaults = planDefaults();
   return {
     padding: {
-      leadIn: Number($("#lead-in").value || 0),
-      leadOut: Number($("#lead-out").value || 0),
+      leadIn: numberInput("#lead-in", defaults.padding.leadIn),
+      leadOut: numberInput("#lead-out", defaults.padding.leadOut),
     },
     silence: {
       enabled: $("#silence-enabled").checked,
-      thresholdDb: Number($("#threshold-db").value || -39),
-      minSilenceSeconds: Number($("#min-silence").value || 0.6),
-      minClipSeconds: Number($("#min-clip").value || 0.3),
-      frontPaddingSeconds: Number($("#front-padding").value || 0.1),
+      thresholdDb: numberInput("#threshold-db", defaults.silence.thresholdDb),
+      minSilenceSeconds: numberInput("#min-silence", defaults.silence.minSilenceSeconds),
+      minClipSeconds: numberInput("#min-clip", defaults.silence.minClipSeconds),
+      frontPaddingSeconds: numberInput("#front-padding", defaults.silence.frontPaddingSeconds),
     },
     export: {
       outputFile: $("#output-file").value.trim(),
-      videoCodec: $("#video-codec").value,
-      audioCodec: "aac",
+      videoCodec: $("#video-codec").value || defaults.export.videoCodec,
+      audioCodec: defaults.export.audioCodec || "aac",
       editFriendly: $("#edit-friendly").checked,
-      frameRate: $("#frame-rate").value ? Number($("#frame-rate").value) : null,
-      format: "mp4",
+      frameRate: optionalNumberInput("#frame-rate"),
+      format: defaults.export.format || "mp4",
     },
   };
 }
@@ -624,7 +794,7 @@ function renderRenderPanel() {
 }
 
 function render() {
-  renderDesktopPanel();
+  renderSettingsPanel();
   renderStepNav();
   renderShell();
   renderSources();
@@ -666,12 +836,15 @@ async function chooseWorkspace() {
   try {
     const selected = await openDialog({ directory: true, multiple: false, title: "Choose VidVerba Workspace" });
     if (!selected) return;
-    state.config = await invokeCommand("set_workspace", { path: selected });
+    $("#settings-workspace-path").value = selected;
+    state.config = await saveRuntimeConfig(currentRuntimeConfig());
+    applyConfigToMainControls({ applyPlan: true });
+    syncSettingsPanelInputs();
     await browse(state.config.defaultInputDir);
-    showNotice("Workspace saved.");
+    showSettingsStatus("Workspace saved.");
     render();
   } catch (error) {
-    showNotice(error.message || String(error), true);
+    showSettingsStatus(error.message || String(error), true);
   }
 }
 
@@ -689,14 +862,28 @@ async function chooseSourceFile() {
   }
 }
 
-async function saveDesktopSettings() {
+async function saveRuntimeConfigFromPanel() {
   if (!state.tauriReady) return;
+  const button = $("#save-runtime-config");
   try {
-    state.config = await invokeCommand("save_settings", { settings: currentDesktopSettings() });
-    showNotice("Desktop settings saved.");
+    setBusy(button, true, "Saving...");
+    const previousInputDir = state.config?.defaultInputDir;
+    state.config = await saveRuntimeConfig(currentRuntimeConfig());
+    applyConfigToMainControls({ applyPlan: true });
+    syncSettingsPanelInputs();
+    if (state.report) {
+      state.planState = "stale";
+      state.renderResult = null;
+    }
+    if (state.config.defaultInputDir && state.config.defaultInputDir !== previousInputDir) {
+      await browse(state.config.defaultInputDir);
+    }
+    showSettingsStatus("Saved to config.toml.");
     render();
   } catch (error) {
-    showNotice(error.message || String(error), true);
+    showSettingsStatus(error.message || String(error), true);
+  } finally {
+    setBusy(button, false);
   }
 }
 
@@ -718,16 +905,16 @@ async function loadTranscript(force) {
       model: selectedTranscriptionModel(),
       language: $("#language-input").value.trim(),
       device: $("#device-input").value,
-      computeType: state.config?.settings?.transcription?.computeType || "auto",
-      beamSize: state.config?.settings?.transcription?.beamSize || 5,
+      computeType: state.config?.settings?.transcription?.computeType ?? "auto",
+      beamSize: state.config?.settings?.transcription?.beamSize ?? 5,
       vadFilter: state.config?.settings?.transcription?.vadFilter ?? true,
-      vadMinSilenceMs: state.config?.settings?.transcription?.vadMinSilenceMs || DEFAULT_VAD_MIN_SILENCE_MS,
+      vadMinSilenceMs: state.config?.settings?.transcription?.vadMinSilenceMs ?? DEFAULT_VAD_MIN_SILENCE_MS,
       wordTimestamps: state.config?.settings?.transcription?.wordTimestamps ?? true,
       conditionOnPreviousText: state.config?.settings?.transcription?.conditionOnPreviousText ?? false,
       hallucinationSilenceThreshold:
-        state.config?.settings?.transcription?.hallucinationSilenceThreshold || DEFAULT_HALLUCINATION_SILENCE_THRESHOLD,
+        state.config?.settings?.transcription?.hallucinationSilenceThreshold ?? DEFAULT_HALLUCINATION_SILENCE_THRESHOLD,
       silenceThresholdDb:
-        state.config?.settings?.transcription?.silenceThresholdDb || DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB,
+        state.config?.settings?.transcription?.silenceThresholdDb ?? DEFAULT_TRANSCRIPT_SILENCE_THRESHOLD_DB,
       force,
     });
     state.transcriptSegments = data.segments;
@@ -814,15 +1001,21 @@ function escapeHtml(value) {
 }
 
 function bindEvents() {
+  $("#settings-button").addEventListener("click", openSettingsPanel);
+  $("#settings-close").addEventListener("click", closeSettingsPanel);
+  $("#settings-scrim").addEventListener("click", closeSettingsPanel);
+  $("#save-runtime-config").addEventListener("click", saveRuntimeConfigFromPanel);
   $("#back-button").addEventListener("click", () => goToStep(state.currentStep - 1));
   $("#next-button").addEventListener("click", () => goToStep(state.currentStep + 1));
   $("#open-folder").addEventListener("click", () => browse($("#folder-input").value));
   $("#up-folder").addEventListener("click", () => state.browseParent && browse(state.browseParent));
   $("#choose-workspace").addEventListener("click", chooseWorkspace);
   $("#choose-source").addEventListener("click", chooseSourceFile);
-  $("#save-dependencies").addEventListener("click", saveDesktopSettings);
   $("#folder-input").addEventListener("keydown", (event) => {
     if (event.key === "Enter") browse($("#folder-input").value);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && isSettingsPanelOpen()) closeSettingsPanel();
   });
   $("#load-transcript").addEventListener("click", () => loadTranscript(false));
   $("#force-transcript").addEventListener("click", () => loadTranscript(true));
@@ -873,12 +1066,8 @@ async function init() {
     return;
   }
   state.config = await getConfig();
-  $("#model-input").value = normalizeTranscriptionModel(state.config.settings?.transcription?.model);
-  $("#language-input").value = state.config.settings?.transcription?.language || "";
-  $("#device-input").value = state.config.settings?.transcription?.device || "auto";
-  $("#video-codec").value = state.config.settings?.export?.videoCodec || "libx264";
-  $("#edit-friendly").checked = state.config.settings?.export?.editFriendly ?? true;
-  $("#frame-rate").value = state.config.settings?.export?.frameRate || "";
+  applyConfigToMainControls({ applyPlan: true });
+  syncSettingsPanelInputs();
   await browse(state.config.defaultInputDir);
   render();
 }
